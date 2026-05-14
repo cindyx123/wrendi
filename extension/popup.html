@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Wrendi</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="popup.css"/>
+</head>
+<body>
+<div id="app">
+  <!-- Not signed in -->
+  <div id="view-unauthed" style="display:none">
+    <div class="header"><div class="logo">⬡ WRENDI</div></div>
+    <div style="padding:20px;text-align:center">
+      <div style="font-size:32px;margin-bottom:12px">🔐</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px">Sign in to get started</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:20px;line-height:1.6">Sign in at wrendi.pages.dev, then come back here. Your session syncs automatically.</div>
+      <button class="btn btn-primary btn-full" id="btn-open-site">Open Wrendi →</button>
+    </div>
+  </div>
+
+  <!-- Signed in -->
+  <div id="view-authed" style="display:none">
+    <div class="header">
+      <div class="logo">⬡ WRENDI</div>
+      <div class="portal-pill" id="portal-pill">detecting…</div>
+      <button class="icon-btn" id="btn-open-webapp" title="Open Wrendi">⧉</button>
+      <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="scrape">Scrape</button>
+      <button class="tab" data-tab="queue">Queue <span class="tab-count" id="queue-count">0</span></button>
+      <button class="tab" data-tab="apply">Apply</button>
+    </div>
+
+    <!-- Scrape Tab -->
+    <div class="panel active" id="panel-scrape">
+      <div id="page-banner" class="info-box info-blue" style="margin-bottom:8px"></div>
+      <div class="panel-section">
+        <div class="section-label">Detected Job</div>
+        <div class="scrape-preview">
+          <div class="scrape-row"><span class="scrape-key">Portal</span><span class="scrape-val" id="sp-portal">—</span></div>
+          <div class="scrape-row"><span class="scrape-key">Title</span><span class="scrape-val" id="sp-title">—</span></div>
+          <div class="scrape-row"><span class="scrape-key">Company</span><span class="scrape-val" id="sp-company">—</span></div>
+          <div class="scrape-row"><span class="scrape-key">Location</span><span class="scrape-val" id="sp-location">—</span></div>
+          <div class="scrape-row"><span class="scrape-key">JD</span><span class="scrape-val" id="sp-jd">—</span></div>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-full" id="btn-scrape">⬡ Scrape &amp; Send to Wrendi</button>
+      <div id="scrape-status" class="status-row" style="margin-top:6px"></div>
+    </div>
+
+    <!-- Queue Tab -->
+    <div class="panel" id="panel-queue">
+      <div class="panel-toolbar">
+        <span class="panel-label" id="queue-label">Synced from cloud</span>
+        <button class="btn btn-xs btn-ghost" id="btn-refresh">↻ Refresh</button>
+      </div>
+      <div id="queue-list" class="job-list"></div>
+      <div class="info-box info-blue" style="margin-top:8px;font-size:11px">Tailor, score, and manage jobs in the full web app.</div>
+    </div>
+
+    <!-- Apply Tab -->
+    <div class="panel" id="panel-apply">
+      <div id="apply-page-warn" class="info-box info-amber" style="display:none;margin-bottom:8px">⚑ Navigate to the job's application page first.</div>
+      <div class="panel-section">
+        <div class="section-label">Select Job</div>
+        <select class="select" id="apply-job-select"><option value="">— select from queue —</option></select>
+      </div>
+      <div id="apply-job-card" style="display:none" class="job-mini-card"></div>
+      <div id="apply-checklist" class="checklist" style="margin-top:8px"></div>
+      <div id="apply-flags" style="display:none" class="flag-box"></div>
+      <button class="btn btn-success btn-full" id="btn-autofill" disabled style="margin-top:8px">⚡ Auto-fill This Form</button>
+      <div id="apply-status" class="status-row" style="margin-top:6px"></div>
+      <div class="divider"></div>
+      <div class="info-box info-blue" style="font-size:11px">Fields in <span style="color:var(--amber)">amber</span> = unknown questions — answer manually, then submit yourself.</div>
+    </div>
+
+    <!-- Settings Overlay -->
+    <div id="settings-overlay" class="overlay" style="display:none">
+      <div class="overlay-header">
+        <span class="logo">⚙ Settings</span>
+        <button class="icon-btn" id="btn-close-settings">✕</button>
+      </div>
+      <div class="overlay-body">
+        <div class="panel-section">
+          <label class="field-label">Worker URL</label>
+          <input class="input" id="worker-url-input" placeholder="https://wrendi-worker.xxx.workers.dev"/>
+          <div class="info-box info-blue" style="margin-top:5px;font-size:11px">Your Cloudflare Worker URL from wrangler deploy.</div>
+        </div>
+        <div class="divider"></div>
+        <div class="field-label" style="margin-bottom:4px">Extension ID</div>
+        <div id="ext-id-box" class="ext-id-box">—</div>
+        <button class="btn btn-ghost btn-xs" id="btn-copy-extid" style="margin-top:6px">Copy ID</button>
+        <div class="info-box info-blue" style="margin-top:6px;font-size:11px">Paste this in Wrendi → Profile → Extension Bridge.</div>
+        <div class="divider"></div>
+        <div class="field-label" style="margin-bottom:8px">Auto-fill Profile</div>
+        <div class="grid-2">
+          <div><label class="field-label">Full Name</label><input class="input" id="p-name"/></div>
+          <div><label class="field-label">Email</label><input class="input" id="p-email" type="email"/></div>
+          <div><label class="field-label">Phone</label><input class="input" id="p-phone"/></div>
+          <div><label class="field-label">Location</label><input class="input" id="p-location"/></div>
+          <div><label class="field-label">LinkedIn</label><input class="input" id="p-linkedin"/></div>
+          <div><label class="field-label">Portfolio</label><input class="input" id="p-portfolio"/></div>
+          <div><label class="field-label">Work Auth</label>
+            <select class="select" id="p-workauth">
+              <option value="">Select…</option>
+              <option>US Citizen</option><option>Green Card</option>
+              <option>H1-B (requires sponsorship)</option><option>EAD / OPT</option>
+            </select>
+          </div>
+          <div><label class="field-label">Salary Range</label><input class="input" id="p-salary" placeholder="$90k–$120k"/></div>
+        </div>
+        <button class="btn btn-primary btn-full" id="btn-save-settings" style="margin-top:12px">Save Settings</button>
+        <div id="settings-msg" class="status-row" style="text-align:center;margin-top:4px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

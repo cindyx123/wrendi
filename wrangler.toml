@@ -1,0 +1,24 @@
+name = "wrendi-worker"
+main = "worker/index.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "2b2a683cff188e04e9008bc1b90ef63a"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wrendi-db"
+database_id = "86c96bee-d9df-497c-9739-dcf046a8ff3c"
+
+[[r2_buckets]]
+binding = "RESUMES"
+bucket_name = "wrendi-resumes"
+
+# Secrets — set via CLI (never put values in this file):
+# npx wrangler secret put ANTHROPIC_API_KEY   → your Anthropic key
+# npx wrangler secret put JWT_SECRET          → any long random string
+# npx wrangler secret put RESEND_API_KEY      → from resend.com (free)
+# npx wrangler secret put RAPIDAPI_KEY        → from rapidapi.com/jsearch (free tier)
+# npx wrangler secret put ADMIN_EMAIL         → your email (gets admin dashboard access)
+
+[triggers]
+crons = ["0 13 * * *"]  # 9:00 AM EST daily (13:00 UTC)

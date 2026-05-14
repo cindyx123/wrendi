@@ -1,0 +1,70 @@
+{
+  "manifest_version": 3,
+  "name": "Job Ops \u2013 AI Career Assistant",
+  "version": "1.2.0",
+  "description": "Scrape jobs and auto-fill applications. Pairs with wrendi.pages.dev.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://wrendi.pages.dev/*",
+      "http://localhost:*/*"
+    ]
+  },
+  "host_permissions": [
+    "https://*.linkedin.com/*",
+    "https://*.indeed.com/*",
+    "https://*.workday.com/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.greenhouse.io/*",
+    "https://*.lever.co/*",
+    "https://*.icims.com/*",
+    "https://*.taleo.net/*",
+    "https://*.adp.com/*",
+    "https://*.accenture.com/*",
+    "https://*.jobvite.com/*",
+    "https://*.smartrecruiters.com/*",
+    "https://api.anthropic.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.linkedin.com/*",
+        "https://*.indeed.com/*",
+        "https://*.workday.com/*",
+        "https://*.myworkdayjobs.com/*",
+        "https://*.greenhouse.io/*",
+        "https://*.lever.co/*",
+        "https://*.icims.com/*",
+        "https://*.taleo.net/*",
+        "https://*.adp.com/*",
+        "https://*.accenture.com/*",
+        "https://*.jobvite.com/*",
+        "https://*.smartrecruiters.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Job Ops"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
