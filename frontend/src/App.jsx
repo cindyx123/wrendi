@@ -2,6 +2,26 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const API = import.meta.env.VITE_API_URL || "https://wrendi-worker.YOUR_SUBDOMAIN.workers.dev";
 
+// ─── Browser-side Claude API (free via Claude.ai Pro subscription) ────────────
+// When you're ready to share with others, set VITE_USE_WORKER_AI=true and
+// add ANTHROPIC_API_KEY to the Worker instead.
+async function callClaude(prompt, system = "") {
+  const body = {
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1500,
+    messages: [{ role: "user", content: prompt }],
+  };
+  if (system) body.system = system;
+  const res  = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.content?.map(b => b.text || "").join("") || "";
+}
+
 // ─── API client ───────────────────────────────────────────────────────────────
 function useAPI() {
   const token = () => localStorage.getItem("wrendi_token") || "";
@@ -473,13 +493,34 @@ function Studio({ jobs, api, onRefresh }) {
   const [loading,setLoading]= useState(false);
   const [status, setStatus] = useState("");
 
+  const job = jobs.find(j=>j.id===jobId||j.id===Number(jobId));
+
   const run = async () => {
     if (!jobId) { setStatus("Select a job first"); return; }
+    if (!job?.jd) { setStatus("This job has no JD saved — add one in Queue"); return; }
     setLoading(true); setResult(""); setStatus("Working…");
     try {
-      const data = await api.post(mode==="tailor"?"/ai/tailor":"/ai/cover", { jobId, toneGuide:tone });
-      setResult(data.text||"");
-      setStatus("✓ Saved to job automatically");
+      let text;
+      if (mode === "tailor") {
+        // Get profile for master resume
+        const prof = await api.get("/profile");
+        if (!prof?.resume_text) { setStatus("Add your master resume in Profile first"); setLoading(false); return; }
+        text = await callClaude(
+          `Master resume:\n\n${prof.resume_text}\n\nJob description:\n\n${job.jd}\n\nTone: ${tone}\n\nTailor the resume. Reorder bullets to surface most relevant experience, weave in JD keywords naturally, match company tone in summary. Return full tailored resume only.`,
+          "You are an expert resume writer and UX career coach. Tailor resumes to maximize ATS pass rates without fabricating experience. Mirror the tone of the JD precisely."
+        );
+        // Save back to job in Worker
+        await api.put(`/jobs/${jobId}`, { tailored_resume: text, status: "tailoring" });
+      } else {
+        const prof = await api.get("/profile");
+        text = await callClaude(
+          `Job: ${job.title} at ${job.company}\n\nJD:\n${job.jd}\n\nBackground:\n${prof?.resume_text||""}\n\nTone: ${tone}\n\nName: ${prof?.name}, Email: ${prof?.email}\n\nWrite a tailored cover letter. Lead with a hook. 3 short paragraphs max.`,
+          "You are an expert cover letter writer. Never be generic. Mirror the company's exact tone."
+        );
+        await api.put(`/jobs/${jobId}`, { cover_letter: text });
+      }
+      setResult(text);
+      setStatus("✓ Saved to job");
       onRefresh();
     } catch(e) { setStatus("Error: "+e.message); }
     setLoading(false);
@@ -533,10 +574,22 @@ function ATS({ jobs, api, onRefresh }) {
 
   const run = async () => {
     if (!jobId) { setStatus("Select a job first"); return; }
+    const job = jobs.find(j=>j.id===jobId||j.id===Number(jobId));
+    if (!job?.jd) { setStatus("No JD on this job"); return; }
     setLoading(true); setResult(null); setStatus("Analyzing…");
     try {
-      const data = await api.post("/ai/score", { jobId, resumeText:extra||undefined });
-      setResult(data); setStatus(`${data.score}/100 · ${data.grade} · saved`);
+      const prof = await api.get("/profile");
+      const toScore = extra || job.tailored_resume || prof?.resume_text || "";
+      if (!toScore) { setStatus("Add your resume in Profile first"); setLoading(false); return; }
+      const raw = await callClaude(
+        `Score this resume against the JD.\n\nJD:\n${job.jd}\n\nRESUME:\n${toScore}\n\nReturn ONLY JSON: {"score":85,"grade":"B+","summary":"...","matched_keywords":["k1"],"missing_keywords":["k2"],"strengths":["s1"],"suggestions":["s1"]}`,
+        "You are an ATS scoring engine. Return ONLY valid JSON, no markdown, no explanation."
+      );
+      const data = JSON.parse(raw.replace(/```json|```/g,"").trim());
+      setResult(data);
+      const newStatus = data.score>=80?"ready":data.score>=60?"scored":"flagged";
+      await api.put(`/jobs/${jobId}`, { ats_score: data.score, status: newStatus });
+      setStatus(`${data.score}/100 · ${data.grade} · saved`);
       onRefresh();
     } catch(e) { setStatus("Error: "+e.message); }
     setLoading(false);
@@ -604,8 +657,14 @@ function Apply({ job, jobs, api, onRefresh, onSelect }) {
   const draftAnswer = async () => {
     if (!ansQ||!job) return;
     setAnsLoad(true); setAnsA("");
-    try { const d=await api.post("/ai/answer",{question:ansQ,jobId:job.id}); setAnsA(d.text||""); }
-    catch(e) { setAnsA("Error: "+e.message); }
+    try {
+      const prof = await api.get("/profile");
+      const text = await callClaude(
+        `Job: ${job.title} at ${job.company}\nBackground:\n${prof?.resume_text||""}\n\nQuestion: "${ansQ}"\n\nWrite a concise, authentic answer (2-4 sentences). First person. No fluff.`,
+        "Answer job application questions concisely and authentically based only on the candidate's real background."
+      );
+      setAnsA(text);
+    } catch(e) { setAnsA("Error: "+e.message); }
     setAnsLoad(false);
   };
 
@@ -1063,10 +1122,18 @@ function InterviewPrep({ jobs, api }) {
     if (!jobId) return;
     setLoading(true); setStatus("Generating prep…"); setPrep(null); setQuestions([]);
     try {
-      const data = await api.post("/ai/interview-prep", { jobId });
+      const job = jobs.find(j=>j.id===jobId||j.id===Number(jobId));
+      const prof = await api.get("/profile");
+      const raw = await callClaude(
+        `Job: ${job.title} at ${job.company}\n\nJob Description:\n${job.jd}\n\nCandidate Background:\n${prof?.resume_text||"(no resume provided)"}\n\nGenerate interview prep. Return ONLY this JSON structure:\n{"company_context":"2-sentence overview","role_focus":"What they really want in this hire","questions":[{"id":"q1","category":"behavioral","question":"Specific question","why":"Why they ask this","approach":"How to answer using this candidate's background","key_points":["specific point"]}]}\n\nCategories: behavioral, technical, role_specific, culture_fit, situational\nInclude 10-12 questions. Make every question specific to THIS job and THIS candidate.`,
+        "You are an expert interview coach. Generate highly specific, actionable interview prep. Return ONLY valid JSON, no markdown."
+      );
+      const data = JSON.parse(raw.replace(/```json|```/g,"").trim());
       setPrep(data);
       setQuestions(data.questions||[]);
       setStatus(`✓ ${data.questions?.length||0} questions generated`);
+      // Save to Worker
+      await api.put(`/interview-prep/${jobId}`, { questions: data });
     } catch(e) { setStatus("Error: "+e.message); }
     setLoading(false);
   };
