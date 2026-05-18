@@ -47,7 +47,7 @@
       title:    ["[data-automation-id='jobPostingHeader']", ".css-1q2dra3", "h1"],
       company:  ["[data-automation-id='company-name']", ".css-dmjzth", "[data-automation-id='lob-name']", ".css-1q2dra3 + div", "title"],
       location: ["[data-automation-id='locations']", ".css-13waqqa", "[data-automation-id='location']"],
-      jd:       ["[data-automation-id='job-posting-description']", ".css-cygeeu", "[data-automation-id='jobPostingDescription']"],
+      jd:       ["#mainContent", ".css-gj3t6y", "[data-automation-id='job-posting-description']", ".css-cygeeu", "[data-automation-id='jobPostingDescription']"],
       isListing: () => /job\//.test(location.pathname) || !!document.querySelector("[data-automation-id='jobPostingHeader']"),
       isApplication: () => /apply/.test(location.pathname) || !!document.querySelector("[data-automation-id='firstName']"),
     },

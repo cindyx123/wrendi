@@ -230,6 +230,37 @@ async function init() {
 
   if (!authed) {
     $("btn-open-site").addEventListener("click", () => chrome.tabs.create({ url:"https://wrendi.pages.dev" }));
+    $("btn-sync-token").addEventListener("click", async () => {
+      const status = $("sync-status");
+      status.textContent = "Looking for session…";
+      status.className = "status-row";
+      // Find a wrendi.pages.dev tab and read its token
+      const tabs = await chrome.tabs.query({ url: "https://wrendi.pages.dev/*" });
+      if (!tabs.length) {
+        status.textContent = "No Wrendi tab found — open wrendi.pages.dev first";
+        status.className = "status-row error";
+        return;
+      }
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabs[0].id },
+          func: () => localStorage.getItem("wrendi_token"),
+        });
+        const token = results?.[0]?.result;
+        if (token) {
+          await chrome.storage.local.set({ wrendi_token: token });
+          status.textContent = "✓ Session synced — reloading…";
+          status.className = "status-row success";
+          setTimeout(() => window.location.reload(), 800);
+        } else {
+          status.textContent = "No session found — sign in at wrendi.pages.dev";
+          status.className = "status-row error";
+        }
+      } catch(e) {
+        status.textContent = "Error: " + e.message;
+        status.className = "status-row error";
+      }
+    });
     return;
   }
 
