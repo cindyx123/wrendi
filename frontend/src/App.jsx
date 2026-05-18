@@ -409,6 +409,162 @@ function Queue({ jobs, api, onRefresh, onSelect }) {
   const [editJob, setEditJob] = useState(null);
   const [editJD,  setEditJD]  = useState("");
   const [editMsg, setEditMsg] = useState("");
+  const [viewJob, setViewJob] = useState(null);
+  const [viewMode, setViewMode] = useState("resume"); // resume | cover
+
+  const filtered = jobs
+    .filter(j=>filter==="all"||j.status===filter)
+    .filter(j=>!search||`${j.title} ${j.company}`.toLowerCase().includes(search.toLowerCase()));
+
+  const addJob = async () => {
+    if (!form.title||!form.company) return;
+    setLoading(true);
+    try { await api.post("/jobs", form); onRefresh(); setShowAdd(false); setForm({ title:"",company:"",location:"",portal:"linkedin",url:"",jd:"" }); }
+    catch(e) { alert(e.message); }
+    setLoading(false);
+  };
+
+  const remove = async (id) => { await api.delete(`/jobs/${id}`); onRefresh(); };
+  const openEdit = (job) => { setEditJob(job); setEditJD(job.jd||""); setEditMsg(""); };
+  const openView = (job, mode) => { setViewJob(job); setViewMode(mode); };
+
+  const saveEdit = async () => {
+    if (!editJob) return;
+    try {
+      await api.put(`/jobs/${editJob.id}`, { jd: editJD });
+      setEditMsg("✓ Saved");
+      onRefresh();
+      setTimeout(()=>{ setEditMsg(""); setEditJob(null); }, 1500);
+    } catch(e) { setEditMsg("Error: "+e.message); }
+  };
+
+  return (
+    <Stack>
+      {/* View saved resume / cover letter modal */}
+      {viewJob && (
+        <div style={{position:"fixed",inset:0,background:"rgba(10,13,20,.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:"var(--surf)",border:"1px solid var(--b)",borderRadius:12,width:"100%",maxWidth:680,maxHeight:"85vh",display:"flex",flexDirection:"column"}} className="fade-in">
+            <div style={{padding:"16px 20px",borderBottom:"1px solid var(--b)",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:15}}>{viewJob.title} @ {viewJob.company}</div>
+                <div style={{display:"flex",gap:8,marginTop:8}}>
+                  {viewJob.tailored_resume && (
+                    <span onClick={()=>setViewMode("resume")} style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",background:viewMode==="resume"?"var(--ad)":"var(--surf2)",color:viewMode==="resume"?"var(--a2)":"var(--t3)",border:`1px solid ${viewMode==="resume"?"var(--a)":"var(--b)"}`}}>
+                      Tailored Resume
+                    </span>
+                  )}
+                  {viewJob.cover_letter && (
+                    <span onClick={()=>setViewMode("cover")} style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",background:viewMode==="cover"?"var(--pud)":"var(--surf2)",color:viewMode==="cover"?"var(--pu)":"var(--t3)",border:`1px solid ${viewMode==="cover"?"var(--pu)":"var(--b)"}`}}>
+                      Cover Letter
+                    </span>
+                  )}
+                </div>
+              </div>
+              <Row gap={8}>
+                <Btn size="sm" variant="ghost" onClick={()=>navigator.clipboard.writeText(viewMode==="resume"?viewJob.tailored_resume:viewJob.cover_letter)}>
+                  Copy
+                </Btn>
+                <Btn size="sm" onClick={()=>setViewJob(null)}>✕ Close</Btn>
+              </Row>
+            </div>
+            <div style={{padding:20,overflowY:"auto",flex:1}}>
+              <div style={{background:"var(--surf2)",border:"1px solid var(--b)",borderRadius:8,padding:16,fontSize:13,lineHeight:1.8,color:"var(--t2)",whiteSpace:"pre-wrap",fontFamily:"var(--sans)"}}>
+                {viewMode==="resume" ? viewJob.tailored_resume : viewJob.cover_letter}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit JD panel */}
+      {editJob && (
+        <Card style={{borderColor:"var(--a)"}}>
+          <Row style={{justifyContent:"space-between",marginBottom:12}}>
+            <div>
+              <div style={{fontWeight:600}}>{editJob.title} @ {editJob.company}</div>
+              <div style={{fontSize:12,color:"var(--t3)",marginTop:2}}>Paste the full job description so AI features work correctly</div>
+            </div>
+            <Btn size="sm" onClick={()=>setEditJob(null)}>✕</Btn>
+          </Row>
+          <Textarea label="Job Description" minHeight={200} value={editJD} onChange={e=>setEditJD(e.target.value)} placeholder="Paste the full job description here…"/>
+          <Row style={{marginTop:10}}>
+            <Btn variant="primary" onClick={saveEdit}>Save JD</Btn>
+            <Btn onClick={()=>setEditJob(null)}>Cancel</Btn>
+            {editMsg && <span style={{fontSize:12,color:editMsg.startsWith("✓")?"var(--g)":"var(--r)",fontFamily:"var(--mono)"}}>{editMsg}</span>}
+          </Row>
+        </Card>
+      )}
+
+      <Row style={{flexWrap:"wrap",gap:8}}>
+        <input style={{...s.input,flex:1,minWidth:160}} placeholder="Search title or company…" value={search} onChange={e=>setSearch(e.target.value)}/>
+        <select style={{...s.select,width:150}} value={filter} onChange={e=>setFilter(e.target.value)}>
+          <option value="all">All statuses</option>
+          {Object.entries(ST).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <Btn variant="primary" onClick={()=>setShowAdd(v=>!v)}>+ Add Job</Btn>
+      </Row>
+
+      {showAdd && (
+        <Card>
+          <CardTitle>Add Job Manually</CardTitle>
+          <div style={s.grid2}>
+            <Input label="Title" value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} placeholder="UX Designer II"/>
+            <Input label="Company" value={form.company} onChange={e=>setForm(p=>({...p,company:e.target.value}))} placeholder="Fidelity Investments"/>
+            <Input label="Location" value={form.location} onChange={e=>setForm(p=>({...p,location:e.target.value}))} placeholder="Remote"/>
+            <Select label="Portal" value={form.portal} onChange={e=>setForm(p=>({...p,portal:e.target.value}))}>
+              {["linkedin","indeed","workday","greenhouse","lever","icims","taleo","adp","accenture","jobvite"].map(p=><option key={p}>{p}</option>)}
+            </Select>
+          </div>
+          <div style={{marginTop:10}}><Input label="URL" value={form.url} onChange={e=>setForm(p=>({...p,url:e.target.value}))} placeholder="https://…"/></div>
+          <div style={{marginTop:10}}><Textarea label="Job Description" minHeight={140} value={form.jd} onChange={e=>setForm(p=>({...p,jd:e.target.value}))} placeholder="Paste full JD…"/></div>
+          <Row style={{marginTop:12}}>
+            <Btn variant="primary" onClick={addJob} disabled={loading}>{loading?<Dots/>:"Add to Queue"}</Btn>
+            <Btn onClick={()=>setShowAdd(false)}>Cancel</Btn>
+          </Row>
+        </Card>
+      )}
+
+      <div style={{fontSize:12,color:"var(--t3)",fontFamily:"var(--mono)"}}>{filtered.length} jobs</div>
+
+      <Stack>
+        {filtered.map(j=>(
+          <Card key={j.id} style={j.flags?.length?{borderColor:"var(--am)",background:"var(--amd)"}:{}}>
+            <Row style={{alignItems:"flex-start"}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600}}>{j.title}</div>
+                <div style={{fontSize:12,color:"var(--t2)",marginTop:2}}>{j.company} · {j.location} · {j.date_added?.slice(0,10)}</div>
+                {j.flags?.length>0 && <div style={{marginTop:6,display:"flex",flexWrap:"wrap",gap:4}}>{j.flags.map((f,i)=><Tag key={i} color="amber">⚑ {f}</Tag>)}</div>}
+              </div>
+              {j.ats_score && <ScoreRing score={j.ats_score} size={50}/>}
+            </Row>
+            <Row style={{marginTop:10,flexWrap:"wrap",gap:6}}>
+              <Tag color={ST[j.status]?.color||"gray"}>{ST[j.status]?.label||j.status}</Tag>
+              <Tag color="gray">{j.portal_name||j.portal}</Tag>
+              {j.jd ? <Tag color="green">✓ JD</Tag> : <Tag color="red">⚑ No JD</Tag>}
+              {j.tailored_resume && <Tag color="green">✓ Tailored</Tag>}
+              {j.cover_letter    && <Tag color="purple">✓ Cover</Tag>}
+            </Row>
+            <Row style={{marginTop:10,gap:6,flexWrap:"wrap"}}>
+              <Btn size="sm" variant="primary" onClick={()=>onSelect(j)}>Apply →</Btn>
+              <Btn size="sm" variant="ghost" onClick={()=>openEdit(j)}>
+                {j.jd ? "Edit JD" : "⚑ Add JD"}
+              </Btn>
+              {j.tailored_resume && (
+                <Btn size="sm" variant="ghost" onClick={()=>openView(j,"resume")}>View Resume</Btn>
+              )}
+              {j.cover_letter && (
+                <Btn size="sm" variant="ghost" onClick={()=>openView(j,"cover")}>View Cover</Btn>
+              )}
+              {j.url && <a href={j.url} target="_blank" rel="noopener" style={{fontSize:12,color:"var(--a2)"}}>Posting</a>}
+              <Btn size="sm" variant="danger" style={{marginLeft:"auto"}} onClick={()=>remove(j.id)}>Remove</Btn>
+            </Row>
+          </Card>
+        ))}
+        {!filtered.length && <Alert color="blue">No jobs match. Add one above or use Search to find jobs live.</Alert>}
+      </Stack>
+    </Stack>
+  );
+}
 
   const filtered = jobs
     .filter(j=>filter==="all"||j.status===filter)

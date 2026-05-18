@@ -20,12 +20,23 @@ async function workerFetch(method, path, body) {
     chrome.storage.local.get(["workerUrl"])
   ]);
   const base = data.workerUrl || WORKER_URL;
+
+  if (!token) throw new Error("Not signed in — visit wrendi.pages.dev first");
+
   const opts = {
     method,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
   };
   if (body) opts.body = JSON.stringify(body);
+
   const res = await fetch(`${base}${path}`, opts);
+
+  if (res.status === 401) {
+    // Token expired — clear it so popup shows sign-in screen
+    await chrome.storage.local.remove("wrendi_token");
+    throw new Error("Session expired — visit wrendi.pages.dev to sign in again");
+  }
+
   return res.json().catch(() => ({}));
 }
 
