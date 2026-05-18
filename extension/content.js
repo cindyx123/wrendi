@@ -251,22 +251,27 @@
     btn.innerHTML = `
       <div class="jo-fab">
         <span class="jo-fab-icon">⬡</span>
-        <span class="jo-fab-label">Add to Job Ops</span>
+        <span class="jo-fab-label">Add to Wrendi</span>
       </div>
     `;
     document.body.appendChild(btn);
 
-    btn.querySelector(".jo-fab").addEventListener("click", () => {
-      const job = scrapeJob();
+    btn.querySelector(".jo-fab").addEventListener("click", async () => {
+      btn.querySelector(".jo-fab-label").textContent = "Scraping…";
+      const job = await scrapeJobWithJD();
       if (!job.title) {
         showToast("⚠ Could not detect job title. Try highlighting the title text.", "warn");
+        btn.querySelector(".jo-fab-label").textContent = "Add to Wrendi";
         return;
       }
       chrome.runtime.sendMessage({ type: "ADD_JOB", job }, (res) => {
         if (res?.success) {
-          showToast(`✓ "${job.title}" added to queue`, "success");
+          showToast(`✓ "${job.title}" added${job.jd ? " with JD" : " — add JD in Wrendi"}`, "success");
           btn.querySelector(".jo-fab-label").textContent = "✓ Added!";
           btn.querySelector(".jo-fab").classList.add("jo-added");
+        } else {
+          showToast(res?.reason || "Error adding job", "warn");
+          btn.querySelector(".jo-fab-label").textContent = "Add to Wrendi";
         }
       });
     });
@@ -355,10 +360,48 @@
     setTimeout(() => { t.classList.remove("jo-toast-show"); setTimeout(() => t.remove(), 300); }, 3000);
   }
 
+  // ── Wait for JD to load (Workday loads content async) ────────────────────────
+  function waitForElement(selectors, timeout = 8000) {
+    return new Promise((resolve) => {
+      // Check immediately first
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el && el.innerText.trim().length > 50) { resolve(el); return; }
+      }
+      // Otherwise observe DOM changes
+      const start = Date.now();
+      const obs = new MutationObserver(() => {
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el && el.innerText.trim().length > 50) {
+            obs.disconnect();
+            resolve(el);
+            return;
+          }
+        }
+        if (Date.now() - start > timeout) { obs.disconnect(); resolve(null); }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  async function scrapeJobWithJD() {
+    const job = scrapeJob();
+    // If JD is missing or too short, wait for it to load (Workday, LinkedIn SPAs)
+    if (!job.jd || job.jd.length < 100) {
+      const cfg = SCRAPERS[portal.key] || SCRAPERS.generic;
+      const jdEl = await waitForElement(cfg.jd, 8000);
+      if (jdEl) job.jd = jdEl.innerText.trim();
+    }
+    return job;
+  }
+
   // ── Listen for messages from popup ───────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "SCRAPE_JOB") {
-      sendResponse({ job: scrapeJob() });
+      // Use async scraper that waits for JD to load
+      scrapeJobWithJD().then(job => sendResponse({ job }));
+      return true; // keep channel open for async response
     }
     if (msg.type === "AUTOFILL") {
       const result = autofillForm(msg.profile);
