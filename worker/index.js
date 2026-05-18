@@ -106,7 +106,7 @@ async function track(env, userId, event, properties = {}) {
 // ── Claude helper ─────────────────────────────────────────────────────────────
 async function callClaude(apiKey, { prompt, system="", maxTokens=1500 }) {
   try {
-    const body = { model:"claude-sonnet-4-20250514", max_tokens: maxTokens, messages:[{ role:"user", content: prompt }] };
+    const body = { model:"claude-sonnet-4-5", max_tokens: maxTokens, messages:[{ role:"user", content: prompt }] };
     if (system) body.system = system;
     const res  = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -125,7 +125,7 @@ async function searchJobs(query, location, page=1, rapidApiKey) {
   const q = location ? `${query} in ${location}` : query;
   try {
     const res = await fetch(
-      `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(q)}&num_pages=1&page=${page}&date_posted=all`,
+      `https://jsearch.p.rapidapi.com/search-v2?query=${encodeURIComponent(q)}&num_pages=1&page=${page}&date_posted=all&country=us`,
       { headers: { "X-RapidAPI-Key": rapidApiKey, "X-RapidAPI-Host": "jsearch.p.rapidapi.com" } }
     );
     const data = await res.json();

@@ -2,6 +2,26 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const API = import.meta.env.VITE_API_URL || "https://wrendi-worker.YOUR_SUBDOMAIN.workers.dev";
 
+// ─── Browser-side Claude API (free via Claude.ai Pro subscription) ────────────
+// When you're ready to share with others, set VITE_USE_WORKER_AI=true and
+// add ANTHROPIC_API_KEY to the Worker instead.
+async function callClaude(prompt, system = "") {
+  const body = {
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1500,
+    messages: [{ role: "user", content: prompt }],
+  };
+  if (system) body.system = system;
+  const res  = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.content?.map(b => b.text || "").join("") || "";
+}
+
 // ─── API client ───────────────────────────────────────────────────────────────
 function useAPI() {
   const token = () => localStorage.getItem("wrendi_token") || "";
@@ -1515,6 +1535,13 @@ export default function App() {
   const loadJobs = ()=>{ api.get("/jobs").then(setJobs).catch(console.error); };
   const onSelect = (job)=>{ setSelJob(job); setPage("apply"); };
   const logout   = ()=>{ localStorage.removeItem("wrendi_token"); localStorage.removeItem("wrendi_setup_done"); window.location.reload(); };
+
+  // Auto-refresh jobs when switching to these pages
+  useEffect(()=>{
+    if (authed && ["dashboard","queue","apply","studio","ats","prep"].includes(page)) {
+      loadJobs();
+    }
+  }, [page, authed]);
 
   const completeOnboarding = () => {
     localStorage.setItem("wrendi_setup_done","1");

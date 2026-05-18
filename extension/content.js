@@ -44,10 +44,10 @@
       isApplication: () => /\/apply\//.test(location.pathname),
     },
     workday: {
-      title:    ["[data-automation-id='jobPostingHeader']", ".css-1q2dra3"],
-      company:  ["[data-automation-id='company-name']", ".css-dmjzth"],
-      location: ["[data-automation-id='locations']", ".css-13waqqa"],
-      jd:       ["[data-automation-id='job-posting-description']", ".css-cygeeu"],
+      title:    ["[data-automation-id='jobPostingHeader']", ".css-1q2dra3", "h1"],
+      company:  ["[data-automation-id='company-name']", ".css-dmjzth", "[data-automation-id='lob-name']", ".css-1q2dra3 + div", "title"],
+      location: ["[data-automation-id='locations']", ".css-13waqqa", "[data-automation-id='location']"],
+      jd:       ["[data-automation-id='job-posting-description']", ".css-cygeeu", "[data-automation-id='jobPostingDescription']"],
       isListing: () => /job\//.test(location.pathname) || !!document.querySelector("[data-automation-id='jobPostingHeader']"),
       isApplication: () => /apply/.test(location.pathname) || !!document.querySelector("[data-automation-id='firstName']"),
     },
@@ -147,21 +147,35 @@
   // ── Scrape Current Job ────────────────────────────────────────────────────────
   function scrapeJob() {
     const cfg = SCRAPERS[portal.key] || SCRAPERS.generic;
-    const title    = $first(cfg.title);
-    const company  = $first(cfg.company);
-    const location = $first(cfg.location);
-    const jdEl     = $el(cfg.jd);
-    const jd       = jdEl ? jdEl.innerText.trim() : "";
+    const title       = $first(cfg.title);
+    const jobLocation = $first(cfg.location);
+    const jdEl        = $el(cfg.jd);
+    const jd          = jdEl ? jdEl.innerText.trim() : "";
+
+    // Company: try selectors first, then extract from subdomain
+    // e.g. homedepot.wd5.myworkdayjobs.com → "Home Depot"
+    let company = $first(cfg.company);
+    if (!company || company === document.title) {
+      const subdomainMatch = window.location.hostname.match(/^([^.]+)\./);
+      if (subdomainMatch) {
+        company = subdomainMatch[1]
+          .replace(/wd\d+$/, "")
+          .replace(/-/g, " ")
+          .replace(/\b\w/g, l => l.toUpperCase())
+          .trim();
+      }
+    }
+    if (company === document.title) company = "";
 
     return {
-      title:    title    || document.title.replace(/ [-|] .*/, "").trim(),
-      company:  company  || "",
-      location: location || "",
-      jd:       jd       || "",
-      portal:   portal.key,
+      title:      title       || document.title.replace(/ [-|] .*/, "").trim(),
+      company:    company     || "",
+      location:   jobLocation || "",
+      jd:         jd          || "",
+      portal:     portal.key,
       portalName: portal.name,
-      url:      location.href,
-      dateAdded: new Date().toISOString().slice(0, 10),
+      url:        window.location.href,
+      dateAdded:  new Date().toISOString().slice(0, 10),
     };
   }
 
