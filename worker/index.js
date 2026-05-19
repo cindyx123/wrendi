@@ -74,10 +74,11 @@ async function checkRateLimit(env, key) {
 }
 
 // ── Resend email ──────────────────────────────────────────────────────────────
-async function sendMagicLinkEmail(email, link, apiKey) {
+async function sendMagicLinkEmail(email, link, apiKey, signal) {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       from:    "Wrendi <onboarding@resend.dev>",
       to:      [email],
@@ -171,8 +172,11 @@ export default {
     if (path === "/auth/magic" && method === "POST") {
       const { email } = await request.json().catch(()=>({}));
       if (!email?.includes("@")) return err("Valid email required", 400, origin);
-      const allowed = await checkRateLimit(env, `magic:${email}`);
-      if (!allowed) return err("Too many requests. Try again in 15 minutes.", 429, origin);
+      const isAdmin = email === env.ADMIN_EMAIL;
+      if (!isAdmin) {
+        const allowed = await checkRateLimit(env, `magic:${email}`);
+        if (!allowed) return err("Too many requests. Try again in 15 minutes.", 429, origin);
+      }
 
       let user = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
       if (!user) {
@@ -190,7 +194,16 @@ export default {
         .bind(token, user.id, "magic_link", expires).run();
 
       const link = `${url.origin}/auth/verify?token=${token}`;
-      const sent = await sendMagicLinkEmail(email, link, env.RESEND_API_KEY);
+
+      if (isAdmin) {
+        // Admin: skip email, return the link directly so you can click it without waiting
+        return ok({ message:"Magic link sent", debug_link: link }, origin);
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const sent = await sendMagicLinkEmail(email, link, env.RESEND_API_KEY, controller.signal).catch(()=>false);
+      clearTimeout(timeout);
       if (!sent) return err("Failed to send email. Check RESEND_API_KEY.", 500, origin);
       await track(env, user.id, "login_requested");
       return ok({ message:"Magic link sent" }, origin);
@@ -200,15 +213,37 @@ export default {
     if (path === "/auth/verify" && method === "GET") {
       const token = url.searchParams.get("token");
       if (!token) return err("Token required", 400, origin);
+
       const row = await env.DB.prepare(
         "SELECT * FROM auth_tokens WHERE token=? AND type='magic_link' AND used=0"
       ).bind(token).first();
-      if (!row || new Date(row.expires_at)<new Date()) return err("Invalid or expired link", 401, origin);
+
+      if (!row || new Date(row.expires_at) < new Date()) {
+        return new Response(`<!DOCTYPE html><html><head><title>Wrendi</title></head><body>
+          <script>
+            alert("This login link has expired. Please request a new one.");
+            window.location.href = "${ORIGIN}";
+          </script>
+        </body></html>`, { headers: { "Content-Type": "text/html" } });
+      }
+
       await env.DB.prepare("UPDATE auth_tokens SET used=1 WHERE token=?").bind(token).run();
       await env.DB.prepare("UPDATE users SET last_login=datetime('now') WHERE id=?").bind(row.user_id).run();
-      const jwt = await signJWT({ userId: row.user_id, exp: Math.floor(Date.now()/1000)+30*24*3600 }, env.JWT_SECRET);
+
+      const jwt = await signJWT(
+        { userId: row.user_id, exp: Math.floor(Date.now()/1000) + 30*24*3600 },
+        env.JWT_SECRET
+      );
       await track(env, row.user_id, "login");
-      return Response.redirect(`${ORIGIN}/#token=${jwt}`, 302);
+
+      // Use an HTML page to set localStorage directly — avoids hash stripping issues
+      return new Response(`<!DOCTYPE html><html><head><title>Signing in…</title></head><body>
+        <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#64748b">Signing you in…</p>
+        <script>
+          localStorage.setItem("wrendi_token", "${jwt}");
+          window.location.href = "${ORIGIN}";
+        </script>
+      </body></html>`, { headers: { "Content-Type": "text/html" } });
     }
 
     // ── All below require auth ──────────────────────────────────────────────
@@ -245,6 +280,57 @@ export default {
                b.portfolio||"", b.target_role||"", b.salary_range||"", b.work_auth||"",
                b.work_mode||"Remote", b.resume_text||"", b.skills||"").run();
       return ok({}, origin);
+    }
+
+    // ── POST /jobs/import-url ────────────────────────────────────────────────
+    if (path === "/jobs/import-url" && method === "POST") {
+      if (!userId) return err("Unauthorized", 401, origin);
+      const { url: jobUrl } = await request.json().catch(()=>({}));
+      if (!jobUrl?.startsWith("http")) return err("Valid URL required", 400, origin);
+
+      // Fetch the page
+      let html = "";
+      try {
+        const pageRes = await fetch(jobUrl, {
+          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36" }
+        });
+        html = await pageRes.text();
+      } catch(e) { return err("Could not fetch page: " + e.message, 502, origin); }
+
+      // Strip HTML to readable text
+      const text = html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi," ")
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi," ")
+        .replace(/<[^>]+>/g," ")
+        .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&nbsp;/g," ")
+        .replace(/\s{3,}/g,"\n\n").trim().slice(0,8000);
+
+      if (text.length < 100) return err("Could not extract content from this page. The page may require login or use heavy JavaScript rendering.", 400, origin);
+
+      const aiRes = await callClaude(env.ANTHROPIC_API_KEY, {
+        system: "You are a job listing parser. Extract job details and return ONLY valid JSON, no markdown.",
+        prompt: `Extract the job listing from this page text.\n\nURL: ${jobUrl}\n\nPAGE TEXT:\n${text}\n\nReturn ONLY JSON:\n{"title":"job title","company":"company name","location":"location or Remote","jd":"full job description with responsibilities and requirements"}\n\nIf no job listing found, return {"error":"No job listing found"}`,
+        maxTokens: 2000,
+      });
+
+      if (aiRes.error) return err(aiRes.error, 502, origin);
+
+      try {
+        const job = JSON.parse(aiRes.text.replace(/```json|```/g,"").trim());
+        if (job.error) return err(job.error, 400, origin);
+
+        // Deduplicate by URL
+        const exists = await env.DB.prepare("SELECT id FROM jobs WHERE user_id=? AND url=?").bind(userId, jobUrl).first();
+        if (exists) return json({ ok:false, reason:"duplicate", id:exists.id }, 200, origin);
+
+        const id     = randomUUID();
+        const portal = new URL(jobUrl).hostname.replace("www.","").split(".")[0];
+        await env.DB.prepare("INSERT INTO jobs (id,user_id,title,company,location,portal,portal_name,url,jd,flags) VALUES (?,?,?,?,?,?,?,?,?,?)")
+          .bind(id, userId, job.title||"", job.company||"", job.location||"", portal, job.company||portal, jobUrl, job.jd||"", "[]").run();
+
+        await track(env, userId, "job_imported_url", { portal });
+        return ok({ id, title:job.title, company:job.company, location:job.location, jdLength:job.jd?.length||0 }, origin);
+      } catch(e) { return err("Failed to parse: "+e.message, 502, origin); }
     }
 
     // ── GET /jobs ───────────────────────────────────────────────────────────

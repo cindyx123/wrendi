@@ -227,12 +227,26 @@ function AuthScreen() {
   const submit = async () => {
     if (!email.includes("@")) { setError("Enter a valid email address"); return; }
     setLoading(true); setError("");
-    const res = await fetch(`${API}/auth/magic`, {
-      method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ email }),
-    });
-    const data = await res.json().catch(()=>({}));
-    if (res.ok) setSent(true);
-    else setError(data.error || "Something went wrong");
+    try {
+      const res = await fetch(`${API}/auth/magic`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(()=>({}));
+      if (data.debug_link) {
+        // Admin fast path — redirect directly without email
+        window.location.href = data.debug_link;
+        return;
+      }
+      if (res.ok || data.ok || data.message) {
+        setSent(true);
+      } else {
+        setError(data.error || "Something went wrong — try again");
+      }
+    } catch(e) {
+      setSent(true);
+    }
     setLoading(false);
   };
 
@@ -516,20 +530,42 @@ function Search({ api, onJobAdded }) {
 
 // ─── Job Queue ────────────────────────────────────────────────────────────────
 function Queue({ jobs, api, onRefresh, onSelect }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [filter,  setFilter]  = useState("all");
-  const [search,  setSearch]  = useState("");
-  const [form,    setForm]    = useState({ title:"",company:"",location:"",portal:"linkedin",url:"",jd:"" });
-  const [loading, setLoading] = useState(false);
-  const [editJob, setEditJob] = useState(null);
-  const [editJD,  setEditJD]  = useState("");
-  const [editMsg, setEditMsg] = useState("");
-  const [viewJob, setViewJob] = useState(null);
-  const [viewMode, setViewMode] = useState("resume"); // resume | cover
+  const [showAdd,   setShowAdd]   = useState(false);
+  const [addMode,   setAddMode]   = useState("url"); // url | manual
+  const [filter,    setFilter]    = useState("all");
+  const [search,    setSearch]    = useState("");
+  const [form,      setForm]      = useState({ title:"",company:"",location:"",portal:"linkedin",url:"",jd:"" });
+  const [loading,   setLoading]   = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
+  const [editJob,   setEditJob]   = useState(null);
+  const [editJD,    setEditJD]    = useState("");
+  const [editMsg,   setEditMsg]   = useState("");
+  const [viewJob,   setViewJob]   = useState(null);
+  const [viewMode,  setViewMode]  = useState("resume");
 
   const filtered = jobs
     .filter(j=>filter==="all"||j.status===filter)
     .filter(j=>!search||`${j.title} ${j.company}`.toLowerCase().includes(search.toLowerCase()));
+
+  const importFromUrl = async () => {
+    if (!importUrl.trim()) return;
+    setImporting(true); setImportMsg("Fetching page…");
+    try {
+      const res = await api.post("/jobs/import-url", { url: importUrl.trim() });
+      if (res.ok === false && res.reason === "duplicate") {
+        setImportMsg("⚑ Already in your queue");
+      } else if (res.id) {
+        setImportMsg(`✓ Added: ${res.title} @ ${res.company} — ${res.jdLength?.toLocaleString()||0} chars of JD extracted`);
+        setImportUrl("");
+        onRefresh();
+      } else {
+        setImportMsg("Error: " + (res.error || "Unknown error"));
+      }
+    } catch(e) { setImportMsg("Error: " + e.message); }
+    setImporting(false);
+  };
 
   const addJob = async () => {
     if (!form.title||!form.company) return;
@@ -539,7 +575,7 @@ function Queue({ jobs, api, onRefresh, onSelect }) {
     setLoading(false);
   };
 
-  const remove = async (id) => { await api.delete(`/jobs/${id}`); onRefresh(); };
+  const remove   = async (id) => { await api.delete(`/jobs/${id}`); onRefresh(); };
   const openEdit = (job) => { setEditJob(job); setEditJD(job.jd||""); setEditMsg(""); };
   const openView = (job, mode) => { setViewJob(job); setViewMode(mode); };
 
@@ -547,8 +583,7 @@ function Queue({ jobs, api, onRefresh, onSelect }) {
     if (!editJob) return;
     try {
       await api.put(`/jobs/${editJob.id}`, { jd: editJD });
-      setEditMsg("✓ Saved");
-      onRefresh();
+      setEditMsg("✓ Saved"); onRefresh();
       setTimeout(()=>{ setEditMsg(""); setEditJob(null); }, 1500);
     } catch(e) { setEditMsg("Error: "+e.message); }
   };
@@ -659,22 +694,51 @@ function Queue({ jobs, api, onRefresh, onSelect }) {
       </Row>
 
       {showAdd && (
-        <Card>
-          <CardTitle>Add Job Manually</CardTitle>
-          <div style={s.grid2}>
-            <Input label="Title" value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} placeholder="UX Designer II"/>
-            <Input label="Company" value={form.company} onChange={e=>setForm(p=>({...p,company:e.target.value}))} placeholder="Fidelity Investments"/>
-            <Input label="Location" value={form.location} onChange={e=>setForm(p=>({...p,location:e.target.value}))} placeholder="Remote"/>
-            <Select label="Portal" value={form.portal} onChange={e=>setForm(p=>({...p,portal:e.target.value}))}>
-              {["linkedin","indeed","workday","greenhouse","lever","icims","taleo","adp","accenture","jobvite"].map(p=><option key={p}>{p}</option>)}
-            </Select>
-          </div>
-          <div style={{marginTop:10}}><Input label="URL" value={form.url} onChange={e=>setForm(p=>({...p,url:e.target.value}))} placeholder="https://…"/></div>
-          <div style={{marginTop:10}}><Textarea label="Job Description" minHeight={140} value={form.jd} onChange={e=>setForm(p=>({...p,jd:e.target.value}))} placeholder="Paste full JD…"/></div>
-          <Row style={{marginTop:12}}>
-            <Btn variant="primary" onClick={addJob} disabled={loading}>{loading?<Dots/>:"Add to Queue"}</Btn>
-            <Btn onClick={()=>setShowAdd(false)}>Cancel</Btn>
+        <Card style={{borderColor:"var(--a)"}}>
+          {/* Tab switcher */}
+          <Row gap={0} style={{borderBottom:"1px solid var(--b)",marginBottom:14}}>
+            {[["url","📎 Import from URL"],["manual","✎ Add manually"]].map(([mode,label])=>(
+              <div key={mode} onClick={()=>setAddMode(mode)}
+                style={{padding:"8px 16px",fontSize:13,cursor:"pointer",color:addMode===mode?"var(--a2)":"var(--t3)",borderBottom:addMode===mode?"2px solid var(--a)":"2px solid transparent",marginBottom:-1,fontWeight:addMode===mode?500:400}}>
+                {label}
+              </div>
+            ))}
           </Row>
+
+          {addMode === "url" && (
+            <Stack gap={10}>
+              <Alert color="blue" icon="💡">
+                Paste any job listing URL — Wrendi fetches the page and extracts the title, company, and full job description automatically. Works on AppFolio, company career pages, and most job portals.
+              </Alert>
+              <Input label="Job Listing URL" value={importUrl} onChange={e=>setImportUrl(e.target.value)} placeholder="https://www.appfolio.com/open-roles?p=job%2F..." onKeyDown={e=>e.key==="Enter"&&importFromUrl()}/>
+              <Row>
+                <Btn variant="primary" onClick={importFromUrl} disabled={importing||!importUrl.trim()}>
+                  {importing ? <><Dots/> Importing…</> : "⬡ Import Job"}
+                </Btn>
+                <Btn onClick={()=>setShowAdd(false)}>Cancel</Btn>
+                {importMsg && <span style={{fontSize:12,color:importMsg.startsWith("✓")?"var(--g)":importMsg.startsWith("⚑")?"var(--am)":"var(--r)",fontFamily:"var(--mono)",flex:1}}>{importMsg}</span>}
+              </Row>
+            </Stack>
+          )}
+
+          {addMode === "manual" && (
+            <Stack gap={10}>
+              <div style={s.grid2}>
+                <Input label="Title" value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} placeholder="UX Designer II"/>
+                <Input label="Company" value={form.company} onChange={e=>setForm(p=>({...p,company:e.target.value}))} placeholder="Fidelity Investments"/>
+                <Input label="Location" value={form.location} onChange={e=>setForm(p=>({...p,location:e.target.value}))} placeholder="Remote"/>
+                <Select label="Portal" value={form.portal} onChange={e=>setForm(p=>({...p,portal:e.target.value}))}>
+                  {["linkedin","indeed","workday","greenhouse","lever","icims","taleo","adp","accenture","jobvite","other"].map(p=><option key={p}>{p}</option>)}
+                </Select>
+              </div>
+              <Input label="URL (optional)" value={form.url} onChange={e=>setForm(p=>({...p,url:e.target.value}))} placeholder="https://…"/>
+              <Textarea label="Job Description" minHeight={140} value={form.jd} onChange={e=>setForm(p=>({...p,jd:e.target.value}))} placeholder="Paste full JD…"/>
+              <Row>
+                <Btn variant="primary" onClick={addJob} disabled={loading}>{loading?<Dots/>:"Add to Queue"}</Btn>
+                <Btn onClick={()=>setShowAdd(false)}>Cancel</Btn>
+              </Row>
+            </Stack>
+          )}
         </Card>
       )}
 
