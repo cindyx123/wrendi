@@ -2032,8 +2032,15 @@ export default function App() {
 
   useEffect(()=>{
     createGlobalStyles();
-    const match = window.location.hash.match(/token=([^&]+)/);
-    if (match) { localStorage.setItem("wrendi_token", match[1]); window.history.replaceState({},""," "); }
+    // Read token from URL hash (#token=...)
+    const hash = window.location.hash;
+    const match = hash.match(/[#&]token=([^&]+)/);
+    if (match) {
+      const token = match[1];
+      localStorage.setItem("wrendi_token", token);
+      // Clean URL
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     const stored = localStorage.getItem("wrendi_token");
     if (stored) {
       api.get("/auth/me")
@@ -2041,10 +2048,8 @@ export default function App() {
           setUser(u);
           setAuthed(true);
           loadJobs();
-          // Load profile to check onboarding state
           api.get("/profile").then(p=>{
             setProfile(p||{});
-            // Show onboarding if first login (no resume + no setup flag)
             const isNew = !p?.resume_text && !localStorage.getItem("wrendi_setup_done");
             if (isNew) setShowOnboard(true);
           });

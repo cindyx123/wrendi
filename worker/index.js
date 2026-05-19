@@ -236,14 +236,8 @@ export default {
       );
       await track(env, row.user_id, "login");
 
-      // Use an HTML page to set localStorage directly — avoids hash stripping issues
-      return new Response(`<!DOCTYPE html><html><head><title>Signing in…</title></head><body>
-        <p style="font-family:sans-serif;text-align:center;margin-top:40px;color:#64748b">Signing you in…</p>
-        <script>
-          localStorage.setItem("wrendi_token", "${jwt}");
-          window.location.href = "${ORIGIN}";
-        </script>
-      </body></html>`, { headers: { "Content-Type": "text/html" } });
+      // Redirect to Pages app with token in hash
+      return Response.redirect(`${ORIGIN}/#token=${jwt}`, 302);
     }
 
     // ── All below require auth ──────────────────────────────────────────────
