@@ -304,8 +304,8 @@ export default {
       if (!prof?.resume_text) return err("Add your master resume in Profile first", 400, origin);
       if (!job.jd)          return err("This job has no job description saved", 400, origin);
       const res = await callClaude(env.ANTHROPIC_API_KEY, {
-        system: "You are an expert resume writer and UX career coach. Tailor resumes to maximize ATS pass rates without fabricating experience. Mirror the tone of the JD precisely.",
-        prompt: `Master resume:\n\n${prof.resume_text}\n\nJob description:\n\n${job.jd}\n\nTone: ${toneGuide||"Professional, data-driven, user-focused."}\n\nTailor the resume. Reorder bullets to surface most relevant experience, weave in JD keywords naturally, match company tone in summary. Return full tailored resume only.`,
+        system: "You are an expert resume writer and UX career coach. You tailor resumes by selecting the most relevant experience and rewording it to match the job's language — without fabricating anything. Every reworded bullet must still accurately reflect what the candidate actually did.",
+        prompt: `Here is my full master resume:\n\n${prof.resume_text}\n\nHere is the job description:\n\n${job.jd}\n\nTone guidance: ${toneGuide||"Professional, data-driven, user-focused."}\n\nInstructions:\n1. Keep all section headers, job titles, company names, and dates exactly as written\n2. For each job, SELECT only the 3-5 bullets most relevant to this JD — drop the rest\n3. REWORD each selected bullet to mirror the JD's language and keywords — but only say things that are true based on the original bullet\n4. Keep bullets concise — one line each, starting with a strong action verb\n5. Rewrite the summary at the top to directly address this role's requirements\n6. Do not add experience, skills, or achievements that aren't in the original resume\n7. Aim for a tight, focused resume — quality over quantity\n\nReturn the full tailored resume.`,
       });
       if (res.error) { await track(env, userId, "error", { endpoint:"/ai/tailor", message:res.error }); return err(res.error, 502, origin); }
       await env.DB.prepare("UPDATE jobs SET tailored_resume=?, status='tailoring', updated_at=datetime('now') WHERE id=?").bind(res.text, jobId).run();
@@ -344,18 +344,31 @@ export default {
       const toScore = resumeText || job.tailored_resume || prof?.resume_text || "";
       if (!toScore) return err("No resume to score", 400, origin);
       const res = await callClaude(env.ANTHROPIC_API_KEY, {
-        system: "You are an ATS scoring engine. Return ONLY valid JSON, no markdown, no explanation.",
-        prompt: `Score this resume against the JD.\n\nJD:\n${job.jd}\n\nRESUME:\n${toScore}\n\nReturn ONLY JSON: {"score":85,"grade":"B+","summary":"...","matched_keywords":["k1"],"missing_keywords":["k2"],"strengths":["s1"],"suggestions":["s1"]}`,
-        maxTokens: 800,
+        system: "You are an ATS scoring engine. You must return ONLY a valid JSON object. No markdown, no backticks, no explanation, no text before or after the JSON. Just the raw JSON object.",
+        prompt: `Score this resume against the job description.
+
+JOB DESCRIPTION:
+${job.jd}
+
+RESUME:
+${toScore}
+
+Return ONLY this JSON object with no other text:
+{"score":85,"grade":"B+","summary":"Two sentence summary here.","matched_keywords":["keyword1","keyword2"],"missing_keywords":["keyword1","keyword2"],"strengths":["strength1","strength2"],"suggestions":["suggestion1","suggestion2"]}`,
+        maxTokens: 1000,
       });
       if (res.error) return err(res.error, 502, origin);
       try {
-        const data   = JSON.parse(res.text.replace(/```json|```/g,"").trim());
-        const status = data.score >= 80 ? "ready" : data.score >= 60 ? "scored" : "flagged";
+        const cleaned = res.text.replace(/```json|```/g,"").trim();
+        const data    = JSON.parse(cleaned);
+        const status  = data.score >= 80 ? "ready" : data.score >= 60 ? "scored" : "flagged";
         await env.DB.prepare("UPDATE jobs SET ats_score=?, status=?, updated_at=datetime('now') WHERE id=?").bind(data.score, status, jobId).run();
         await track(env, userId, "ats_run", { job_id: jobId, score: data.score });
         return ok(data, origin);
-      } catch { return err("Failed to parse AI response", 502, origin); }
+      } catch(e) {
+        await track(env, userId, "error", { endpoint:"/ai/score", message: "JSON parse failed: " + res.text?.slice(0,200) });
+        return err("Failed to parse AI response: " + e.message, 502, origin);
+      }
     }
 
     // ── POST /ai/answer ─────────────────────────────────────────────────────

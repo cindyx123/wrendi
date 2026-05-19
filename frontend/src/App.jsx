@@ -438,38 +438,77 @@ function Queue({ jobs, api, onRefresh, onSelect }) {
     } catch(e) { setEditMsg("Error: "+e.message); }
   };
 
+  const content = viewJob ? (viewMode==="resume" ? viewJob.tailored_resume : viewJob.cover_letter) : "";
+  const filename = viewJob ? `${viewJob.title}-${viewJob.company}-${viewMode==="resume"?"Resume":"Cover"}`.replace(/\s+/g,"-") : "document";
+
+  const exportPDF = () => {
+    const win = window.open("","_blank");
+    win.document.write(`<!DOCTYPE html><html><head><title>${filename}</title><style>
+      body { font-family: 'Georgia', serif; max-width: 750px; margin: 40px auto; padding: 0 40px; font-size: 14px; line-height: 1.8; color: #1a1a1a; }
+      pre { white-space: pre-wrap; font-family: inherit; font-size: 14px; }
+      @media print { body { margin: 0; padding: 20px; } }
+    </style></head><body><pre>${content.replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre>
+    <script>window.onload=()=>{window.print();}<\/script></body></html>`);
+    win.document.close();
+  };
+
+  const exportDOCX = () => {
+    // Simple RTF that Word and Pages can open
+    const rtf = `{\\rtf1\\ansi\\deff0
+{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}}
+{\\f0\\fs28 ${filename.replace(/-/g," ")}\\par\\par}
+{\\f0\\fs22 ${content
+  .replace(/\\/g,"\\\\")
+  .replace(/\{/g,"\\{")
+  .replace(/\}/g,"\\}")
+  .replace(/\n/g,"\\par\n")}
+}}`;
+    const blob = new Blob([rtf], { type:"application/rtf" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${filename}.rtf`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   return (
     <Stack>
-      {/* View saved resume / cover letter modal */}
+      {/* View / Export modal */}
       {viewJob && (
         <div style={{position:"fixed",inset:0,background:"rgba(10,13,20,.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div style={{background:"var(--surf)",border:"1px solid var(--b)",borderRadius:12,width:"100%",maxWidth:680,maxHeight:"85vh",display:"flex",flexDirection:"column"}} className="fade-in">
-            <div style={{padding:"16px 20px",borderBottom:"1px solid var(--b)",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
-              <div>
-                <div style={{fontWeight:700,fontSize:15}}>{viewJob.title} @ {viewJob.company}</div>
-                <div style={{display:"flex",gap:8,marginTop:8}}>
-                  {viewJob.tailored_resume && (
-                    <span onClick={()=>setViewMode("resume")} style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",background:viewMode==="resume"?"var(--ad)":"var(--surf2)",color:viewMode==="resume"?"var(--a2)":"var(--t3)",border:`1px solid ${viewMode==="resume"?"var(--a)":"var(--b)"}`}}>
-                      Tailored Resume
-                    </span>
-                  )}
-                  {viewJob.cover_letter && (
-                    <span onClick={()=>setViewMode("cover")} style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",background:viewMode==="cover"?"var(--pud)":"var(--surf2)",color:viewMode==="cover"?"var(--pu)":"var(--t3)",border:`1px solid ${viewMode==="cover"?"var(--pu)":"var(--b)"}`}}>
-                      Cover Letter
-                    </span>
-                  )}
+          <div style={{background:"var(--surf)",border:"1px solid var(--b)",borderRadius:12,width:"100%",maxWidth:700,maxHeight:"88vh",display:"flex",flexDirection:"column"}} className="fade-in">
+            {/* Header */}
+            <div style={{padding:"16px 20px",borderBottom:"1px solid var(--b)",flexShrink:0}}>
+              <Row style={{justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:15}}>{viewJob.title} @ {viewJob.company}</div>
+                  <Row gap={6} style={{marginTop:8}}>
+                    {viewJob.tailored_resume && (
+                      <span onClick={()=>setViewMode("resume")} style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",background:viewMode==="resume"?"var(--ad)":"var(--surf2)",color:viewMode==="resume"?"var(--a2)":"var(--t3)",border:`1px solid ${viewMode==="resume"?"var(--a)":"var(--b)"}`}}>
+                        Tailored Resume
+                      </span>
+                    )}
+                    {viewJob.cover_letter && (
+                      <span onClick={()=>setViewMode("cover")} style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",background:viewMode==="cover"?"var(--pud)":"var(--surf2)",color:viewMode==="cover"?"var(--pu)":"var(--t3)",border:`1px solid ${viewMode==="cover"?"var(--pu)":"var(--b)"}`}}>
+                        Cover Letter
+                      </span>
+                    )}
+                  </Row>
                 </div>
-              </div>
-              <Row gap={8}>
-                <Btn size="sm" variant="ghost" onClick={()=>navigator.clipboard.writeText(viewMode==="resume"?viewJob.tailored_resume:viewJob.cover_letter)}>
-                  Copy
-                </Btn>
                 <Btn size="sm" onClick={()=>setViewJob(null)}>✕ Close</Btn>
               </Row>
+              {/* Export buttons */}
+              <Row gap={6} style={{marginTop:12,flexWrap:"wrap"}}>
+                <Btn size="sm" variant="ghost" onClick={()=>navigator.clipboard.writeText(content)}>📋 Copy</Btn>
+                <Btn size="sm" variant="ghost" onClick={exportPDF}>⬇ Export PDF</Btn>
+                <Btn size="sm" variant="ghost" onClick={exportDOCX}>⬇ Export DOCX</Btn>
+                <span style={{fontSize:11,color:"var(--t3)",fontFamily:"var(--mono)",alignSelf:"center"}}>PDF opens print dialog · DOCX downloads as .rtf (opens in Word)</span>
+              </Row>
             </div>
+            {/* Content */}
             <div style={{padding:20,overflowY:"auto",flex:1}}>
               <div style={{background:"var(--surf2)",border:"1px solid var(--b)",borderRadius:8,padding:16,fontSize:13,lineHeight:1.8,color:"var(--t2)",whiteSpace:"pre-wrap",fontFamily:"var(--sans)"}}>
-                {viewMode==="resume" ? viewJob.tailored_resume : viewJob.cover_letter}
+                {content}
               </div>
             </div>
           </div>
@@ -580,7 +619,7 @@ function Studio({ jobs, api, onRefresh }) {
     if (!jobId) { setStatus("Select a job first"); return; }
     setLoading(true); setResult(""); setStatus("Working…");
     try {
-      const data = await api.post(mode==="tailor"?"/ai/tailor":"/ai/cover", { jobId, toneGuide:tone });
+      const data = await api.post("/ai/tailor", { jobId, toneGuide:tone });
       setResult(data.text||"");
       setStatus("✓ Saved to job automatically");
       onRefresh();
