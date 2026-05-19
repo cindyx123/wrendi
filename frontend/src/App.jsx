@@ -1,8 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-
-const API = import.meta.env.VITE_API_URL || "https://wrendi-worker.YOUR_SUBDOMAIN.workers.dev";
-
-// ─── Browser-side Claude API (free via Claude.ai Pro subscription) ────────────
 // When you're ready to share with others, set VITE_USE_WORKER_AI=true and
 // add ANTHROPIC_API_KEY to the Worker instead.
 async function callClaude(prompt, system = "") {
@@ -847,9 +843,12 @@ function Apply({ job, jobs, api, onRefresh, onSelect }) {
 
 // ─── Profile ──────────────────────────────────────────────────────────────────
 function Profile({ api }) {
-  const [p,  setP]   = useState(null);
-  const [msg, setMsg] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [p,        setP]        = useState(null);
+  const [msg,      setMsg]      = useState("");
+  const [saving,   setSaving]   = useState(false);
+  const [importing,setImporting]= useState(false);
+  const [importMsg,setImportMsg]= useState("");
+  const fileRef = useRef(null);
 
   useEffect(()=>{ api.get("/profile").then(d=>setP(d||{})).catch(()=>setP({})); },[]);
   const u = (k,v) => setP(prev=>({...prev,[k]:v}));
@@ -859,6 +858,75 @@ function Profile({ api }) {
     try { await api.put("/profile", p); setMsg("✓ Saved to cloud"); }
     catch(e) { setMsg("Error: "+e.message); }
     setSaving(false); setTimeout(()=>setMsg(""),2500);
+  };
+
+  // ── Import resume from PDF or DOCX ────────────────────────────────────────
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true); setImportMsg("Reading file…");
+
+    try {
+      let text = "";
+
+      if (file.name.endsWith(".pdf")) {
+        // Load PDF.js from CDN
+        if (!window.pdfjsLib) {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+            s.onload = resolve; s.onerror = reject;
+            document.head.appendChild(s);
+          });
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        }
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pages = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page    = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          pages.push(content.items.map(item => item.str).join(" "));
+        }
+        text = pages.join("\n\n");
+
+      } else if (file.name.endsWith(".docx") || file.name.endsWith(".doc")) {
+        // Load mammoth.js from CDN
+        if (!window.mammoth) {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js";
+            s.onload = resolve; s.onerror = reject;
+            document.head.appendChild(s);
+          });
+        }
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await window.mammoth.extractRawText({ arrayBuffer });
+        text = result.value;
+
+      } else if (file.name.endsWith(".txt")) {
+        text = await file.text();
+      } else {
+        setImportMsg("⚑ Unsupported format. Use PDF, DOCX, or TXT.");
+        setImporting(false); return;
+      }
+
+      // Clean up extra whitespace
+      text = text.replace(/\r\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+
+      if (text.length < 50) {
+        setImportMsg("⚑ Could not extract text — try copying and pasting manually.");
+        setImporting(false); return;
+      }
+
+      u("resume_text", text);
+      setImportMsg(`✓ Imported ${text.length.toLocaleString()} characters — review below then Save`);
+    } catch(err) {
+      setImportMsg("Error: " + err.message);
+    }
+    setImporting(false);
+    e.target.value = ""; // reset file input
   };
 
   if (!p) return <Row style={{padding:30,justifyContent:"center",color:"var(--t3)"}}><Spinner/> <span style={{marginLeft:8}}>Loading…</span></Row>;
@@ -889,8 +957,17 @@ function Profile({ api }) {
       </Card>
       <Card>
         <CardTitle>Master Resume</CardTitle>
-        <Alert color="blue" style={{marginBottom:12}}>Plain text. Used as the base for all AI tailoring. Stored encrypted in Cloudflare D1.</Alert>
-        <Textarea minHeight={260} value={p.resume_text||""} onChange={e=>u("resume_text",e.target.value)} placeholder="Paste your full resume here…"/>
+        <Row style={{marginBottom:12,flexWrap:"wrap",gap:8}}>
+          <input ref={fileRef} type="file" accept=".pdf,.docx,.doc,.txt" style={{display:"none"}} onChange={handleImport}/>
+          <Btn variant="ghost" size="sm" onClick={()=>fileRef.current?.click()} disabled={importing}>
+            {importing ? <><Dots/> Importing…</> : "⬆ Import PDF / DOCX / TXT"}
+          </Btn>
+          {importMsg && <span style={{fontSize:12,color:importMsg.startsWith("✓")?"var(--g)":importMsg.startsWith("⚑")?"var(--am)":"var(--r)",fontFamily:"var(--mono)"}}>{importMsg}</span>}
+        </Row>
+        <Alert color="blue" style={{marginBottom:12}}>
+          Import your resume file above or paste plain text below. Used as the base for all AI tailoring.
+        </Alert>
+        <Textarea minHeight={260} value={p.resume_text||""} onChange={e=>u("resume_text",e.target.value)} placeholder="Paste your full resume here, or import a file above…"/>
       </Card>
       <Card>
         <CardTitle>Key Skills (comma-separated)</CardTitle>
