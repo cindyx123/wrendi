@@ -2032,13 +2032,12 @@ export default function App() {
 
   useEffect(()=>{
     createGlobalStyles();
-    // Read token from URL hash (#token=...)
-    const hash = window.location.hash;
-    const match = hash.match(/[#&]token=([^&]+)/);
-    if (match) {
-      const token = match[1];
-      localStorage.setItem("wrendi_token", token);
-      // Clean URL
+    // Read token from URL query param (?token=...)
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get("token");
+    if (urlToken) {
+      localStorage.setItem("wrendi_token", urlToken);
+      // Clean URL without reload
       window.history.replaceState({}, "", window.location.pathname);
     }
     const stored = localStorage.getItem("wrendi_token");

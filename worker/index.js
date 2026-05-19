@@ -236,8 +236,8 @@ export default {
       );
       await track(env, row.user_id, "login");
 
-      // Redirect to Pages app with token in hash
-      return Response.redirect(`${ORIGIN}/#token=${jwt}`, 302);
+      // Redirect to Pages app with token as query param
+      return Response.redirect(`${ORIGIN}?token=${jwt}`, 302);
     }
 
     // ── All below require auth ──────────────────────────────────────────────
