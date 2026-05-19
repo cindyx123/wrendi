@@ -80,14 +80,15 @@
   // ── Auto-fill Configs ─────────────────────────────────────────────────────────
   const FORM_FILLERS = {
     workday: {
-      firstName:  ["[data-automation-id='firstName']"],
-      lastName:   ["[data-automation-id='lastName']"],
-      email:      ["[data-automation-id='email']"],
-      phone:      ["[data-automation-id='phone']"],
-      address:    ["[data-automation-id='addressLine1']"],
-      city:       ["[data-automation-id='city']"],
-      linkedin:   ["[data-automation-id='linkedInUrl']", "[placeholder*='LinkedIn']"],
-      website:    ["[data-automation-id='portfolioUrl']", "[placeholder*='Portfolio']", "[placeholder*='Website']"],
+      firstName:  ["[id='name--legalName--firstName']", "[name='legalName--firstName']", "[data-automation-id='firstName']"],
+      lastName:   ["[id='name--legalName--lastName']",  "[name='legalName--lastName']",  "[data-automation-id='lastName']"],
+      phone:      ["[id='phoneNumber--phoneNumber']",   "[name='phoneNumber']",           "[data-automation-id='phone']"],
+      address:    ["[id='address--addressLine1']",      "[name='addressLine1']"],
+      city:       ["[id='address--city']",              "[name='city']"],
+      zip:        ["[id='address--postalCode']",        "[name='postalCode']"],
+      email:      ["[data-automation-id='email']",      "input[type='email']"],
+      linkedin:   ["[id*='linkedInAccount']",           "[data-automation-id='linkedInUrl']", "input[placeholder*='LinkedIn']"],
+      website:    ["[id*='webAddress'][id*='url']",     "[data-automation-id='portfolioUrl']"],
     },
     greenhouse: {
       firstName:  ["#first_name"],
@@ -192,6 +193,9 @@
       phone:    profile.phone,
       linkedin: profile.linkedin,
       website:  profile.portfolio,
+      address:  profile.location?.split(",")[0]?.trim() || "",
+      city:     profile.location?.split(",")[1]?.trim() || "",
+      zip:      profile.zip || "",
     };
 
     const results = [];

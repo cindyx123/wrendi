@@ -300,20 +300,60 @@ function Dashboard({ jobs, onNav }) {
 }
 
 // ─── Live Search ──────────────────────────────────────────────────────────────
+const LOCATION_PRESETS = [
+  { label:"Any Location",      value:"" },
+  { label:"Remote (anywhere)", value:"remote" },
+  { label:"Remote USA",        value:"remote USA" },
+  { label:"Hybrid",            value:"hybrid" },
+  { label:"On-site",           value:"on-site" },
+  { label:"Atlanta, GA",       value:"Atlanta, GA" },
+  { label:"New York, NY",      value:"New York, NY" },
+  { label:"San Francisco, CA", value:"San Francisco, CA" },
+  { label:"Austin, TX",        value:"Austin, TX" },
+  { label:"Chicago, IL",       value:"Chicago, IL" },
+  { label:"Seattle, WA",       value:"Seattle, WA" },
+  { label:"Boston, MA",        value:"Boston, MA" },
+  { label:"Custom…",           value:"__custom__" },
+];
+
+const DATE_OPTS = [
+  { label:"Any time",      value:"all"   },
+  { label:"Past 24 hours", value:"today" },
+  { label:"Past week",     value:"week"  },
+  { label:"Past month",    value:"month" },
+];
+
+const TYPE_OPTS = [
+  { label:"All types",  value:""          },
+  { label:"Full-time",  value:"FULLTIME"  },
+  { label:"Part-time",  value:"PARTTIME"  },
+  { label:"Contract",   value:"CONTRACTOR"},
+  { label:"Internship", value:"INTERN"    },
+];
+
 function Search({ api, onJobAdded }) {
-  const [query,    setQuery]    = useState("");
-  const [location, setLocation] = useState("");
-  const [results,  setResults]  = useState([]);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
-  const [added,    setAdded]    = useState({});
+  const [query,       setQuery]      = useState("");
+  const [locPreset,   setLocPreset]  = useState("");
+  const [locCustom,   setLocCustom]  = useState("");
+  const [datePosted,  setDatePosted] = useState("all");
+  const [empType,     setEmpType]    = useState("");
+  const [results,     setResults]    = useState([]);
+  const [loading,     setLoading]    = useState(false);
+  const [error,       setError]      = useState("");
+  const [added,       setAdded]      = useState({});
+  const [showFilters, setShowFilters]= useState(false);
   const debounceRef = useRef(null);
 
-  const doSearch = useCallback(async (q, loc) => {
+  const location = locPreset === "__custom__" ? locCustom : locPreset;
+
+  const doSearch = useCallback(async (q, loc, date, type) => {
     if (!q.trim()) { setResults([]); return; }
     setLoading(true); setError("");
     try {
-      const data = await api.get(`/search?q=${encodeURIComponent(q)}&location=${encodeURIComponent(loc)}`);
+      const params = new URLSearchParams({ q, location: loc||"" });
+      if (date && date !== "all") params.set("date_posted", date);
+      if (type) params.set("employment_type", type);
+      const data = await api.get(`/search?${params.toString()}`);
       setResults(data.results||[]);
       if (data.error) setError(data.error);
     } catch(e) { setError(e.message); setResults([]); }
@@ -323,41 +363,116 @@ function Search({ api, onJobAdded }) {
   const handleQuery = (v) => {
     setQuery(v);
     clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => doSearch(v, location), 500);
+    debounceRef.current = setTimeout(() => doSearch(v, location, datePosted, empType), 600);
   };
+
+  const runSearch = () => doSearch(query, location, datePosted, empType);
 
   const addToQueue = async (job) => {
     try {
-      const res = await api.post("/jobs", job);
+      await api.post("/jobs", job);
       setAdded(p=>({...p,[job.id]:"added"}));
       onJobAdded?.();
     } catch(e) {
       if (e.message.includes("duplicate")) setAdded(p=>({...p,[job.id]:"exists"}));
+      else setAdded(p=>({...p,[job.id]:"error"}));
     }
   };
+
+  const activeFilters = [locPreset, datePosted!=="all"?datePosted:"", empType].filter(Boolean).length;
 
   return (
     <Stack>
       <Card>
-        <div style={s.grid2}>
-          <Input label="Job Title" value={query} onChange={e=>handleQuery(e.target.value)} placeholder='e.g. "UX Designer" or "Email Marketing Manager"'/>
-          <Input label="Location (optional)" value={location} onChange={e=>setLocation(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSearch(query,location)} placeholder='e.g. "Remote" or "Atlanta, GA"'/>
-        </div>
-        <Row style={{marginTop:12}}>
-          <Btn variant="primary" onClick={()=>doSearch(query,location)} disabled={loading||!query.trim()}>
+        {/* Main search row */}
+        <Row style={{gap:8,flexWrap:"wrap",marginBottom:10}}>
+          <div style={{flex:2,minWidth:200}}>
+            <span style={s.label}>Job Title / Keywords</span>
+            <input style={s.input} value={query} onChange={e=>handleQuery(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&runSearch()}
+              placeholder='e.g. "UX Designer" or "Product Designer SFMC"'/>
+          </div>
+          <div style={{flex:1,minWidth:160}}>
+            <span style={s.label}>Location</span>
+            <select style={s.select} value={locPreset} onChange={e=>{ setLocPreset(e.target.value); if(e.target.value!=="__custom__") doSearch(query, e.target.value==="__custom__"?locCustom:e.target.value, datePosted, empType); }}>
+              {LOCATION_PRESETS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </Row>
+
+        {/* Custom location input */}
+        {locPreset === "__custom__" && (
+          <div style={{marginBottom:10}}>
+            <input style={s.input} value={locCustom} onChange={e=>setLocCustom(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&runSearch()}
+              placeholder="Type any city, state, or region…"/>
+          </div>
+        )}
+
+        {/* Filter toggle */}
+        <Row style={{marginBottom: showFilters?10:0}}>
+          <Btn size="sm" variant="ghost" onClick={()=>setShowFilters(v=>!v)}>
+            {showFilters ? "▲ Hide filters" : `▼ More filters${activeFilters>0?` (${activeFilters} active)`:""}`}
+          </Btn>
+          {activeFilters>0 && <Btn size="sm" variant="ghost" onClick={()=>{ setLocPreset(""); setLocCustom(""); setDatePosted("all"); setEmpType(""); setResults([]); }}>✕ Clear all</Btn>}
+        </Row>
+
+        {/* Expanded filters */}
+        {showFilters && (
+          <div style={{...s.grid2, marginBottom:12}}>
+            <div>
+              <span style={s.label}>Date Posted</span>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {DATE_OPTS.map(o=>(
+                  <span key={o.value} onClick={()=>{ setDatePosted(o.value); doSearch(query,location,o.value,empType); }}
+                    style={{padding:"5px 11px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",
+                      background:datePosted===o.value?"var(--ad)":"var(--surf2)",
+                      color:datePosted===o.value?"var(--a2)":"var(--t3)",
+                      border:`1px solid ${datePosted===o.value?"var(--a)":"var(--b)"}`,transition:"all .15s"}}>
+                    {o.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <span style={s.label}>Employment Type</span>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {TYPE_OPTS.map(o=>(
+                  <span key={o.value} onClick={()=>{ setEmpType(o.value); doSearch(query,location,datePosted,o.value); }}
+                    style={{padding:"5px 11px",borderRadius:20,fontSize:12,fontFamily:"var(--mono)",cursor:"pointer",
+                      background:empType===o.value?"var(--ad)":"var(--surf2)",
+                      color:empType===o.value?"var(--a2)":"var(--t3)",
+                      border:`1px solid ${empType===o.value?"var(--a)":"var(--b)"}`,transition:"all .15s"}}>
+                    {o.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <Row style={{flexWrap:"wrap",gap:8}}>
+          <Btn variant="primary" onClick={runSearch} disabled={loading||!query.trim()}>
             {loading ? <><Spinner/> Searching…</> : "🔍 Search Jobs"}
           </Btn>
           {results.length>0 && <span style={{fontSize:12,color:"var(--t3)",fontFamily:"var(--mono)"}}>{results.length} results</span>}
+          {/* Active filter summary */}
+          {location && <Tag color={location.toLowerCase().includes("remote")?"green":"blue"}>{location}</Tag>}
+          {datePosted!=="all" && <Tag color="amber">{DATE_OPTS.find(o=>o.value===datePosted)?.label}</Tag>}
+          {empType && <Tag color="purple">{TYPE_OPTS.find(o=>o.value===empType)?.label}</Tag>}
         </Row>
-        {error && <Alert color="amber" icon="⚑" style={{marginTop:10}}>{error.includes("not configured")?"Search requires a RAPIDAPI_KEY secret in your Worker. Sign up free at rapidapi.com/letscrape-6bsfe32z/api/jsearch":error}</Alert>}
+
+        {error && <Alert color="amber" icon="⚑" style={{marginTop:10}}>
+          {error.includes("not configured") ? "Search requires a RAPIDAPI_KEY secret in your Worker." : error}
+        </Alert>}
       </Card>
 
       {loading && !results.length && (
-        <Card><Row style={{justifyContent:"center",padding:20,color:"var(--t3)"}}><Spinner/> <span style={{marginLeft:8}}>Searching across LinkedIn, Indeed, Glassdoor…</span></Row></Card>
+        <Card><Row style={{justifyContent:"center",padding:20,color:"var(--t3)"}}><Spinner/> <span style={{marginLeft:8}}>Searching LinkedIn, Indeed, Glassdoor…</span></Row></Card>
       )}
 
       {results.map(job=>(
-        <div key={job.id} style={{...s.card,transition:"border-color .15s",cursor:"default"}} className="fade-in">
+        <div key={job.id} style={{...s.card,transition:"border-color .15s"}} className="fade-in">
           <Row style={{alignItems:"flex-start"}}>
             {job.logo && <img src={job.logo} alt="" style={{width:36,height:36,borderRadius:6,objectFit:"contain",background:"white",padding:2,flexShrink:0}}/>}
             <div style={{flex:1}}>
@@ -366,14 +481,14 @@ function Search({ api, onJobAdded }) {
                   <div style={{fontWeight:600,fontSize:14}}>{job.title}</div>
                   <div style={{fontSize:12,color:"var(--t2)",marginTop:2}}>{job.company} · {job.location}</div>
                 </div>
-                <Row gap={6} style={{flexShrink:0}}>
+                <Row gap={6} style={{flexShrink:0,flexWrap:"wrap"}}>
                   {job.remote && <Tag color="green">Remote</Tag>}
                   {job.salary && <Tag color="purple">{job.salary}</Tag>}
                   <Tag color="gray">{job.portal_name||job.portal}</Tag>
                 </Row>
               </Row>
               {job.jd && <div style={{fontSize:12,color:"var(--t3)",marginTop:8,lineHeight:1.5,maxHeight:48,overflow:"hidden"}}>{job.jd.slice(0,200)}…</div>}
-              <Row style={{marginTop:10,gap:8}}>
+              <Row style={{marginTop:10,gap:8,flexWrap:"wrap"}}>
                 <Btn size="sm" variant={added[job.id]==="added"?"success":added[job.id]==="exists"?"ghost":"primary"} onClick={()=>addToQueue(job)} disabled={!!added[job.id]}>
                   {added[job.id]==="added"?"✓ Added":added[job.id]==="exists"?"Already in queue":"+ Add to Queue"}
                 </Btn>
@@ -386,10 +501,14 @@ function Search({ api, onJobAdded }) {
       ))}
 
       {!loading && !results.length && query && (
-        <Card><div style={{textAlign:"center",padding:24,color:"var(--t3)"}}>No results for "{query}". Try different keywords or check your RAPIDAPI_KEY.</div></Card>
+        <Card><div style={{textAlign:"center",padding:24,color:"var(--t3)"}}>No results for "{query}"
+          {location ? ` in ${location}` : ""}. Try broader keywords or a different location.</div></Card>
       )}
       {!query && (
-        <Card><div style={{textAlign:"center",padding:24,color:"var(--t3)",lineHeight:1.8}}>Search for jobs across LinkedIn, Indeed, Glassdoor, and more.<br/><span style={{fontSize:12}}>Results come from JSearch via RapidAPI — 500 free searches/month.</span></div></Card>
+        <Card><div style={{textAlign:"center",padding:24,color:"var(--t3)",lineHeight:1.8}}>
+          Search for jobs across LinkedIn, Indeed, Glassdoor, and more.<br/>
+          <span style={{fontSize:12}}>Use the location dropdown to filter by remote, hybrid, or specific city.</span>
+        </div></Card>
       )}
     </Stack>
   );
@@ -1668,22 +1787,160 @@ function FirstJobSearch({ api }) {
   );
 }
 
+// ─── Resume Builder ───────────────────────────────────────────────────────────
+const TEMPLATES = [
+  {
+    id: "classic",
+    name: "Classic",
+    icon: "📋",
+    desc: "Your current layout — Calibri font, blue accent headers, clean bullets. Works everywhere.",
+    good: ["All industries", "Healthcare", "Tech", "Agency"],
+  },
+  {
+    id: "faang",
+    name: "FAANG",
+    icon: "🏢",
+    desc: "Google/Meta/Apple style — Arial, minimal whitespace, metrics-forward. No color, maximum signal.",
+    good: ["Google", "Meta", "Apple", "Amazon", "Microsoft", "Startups"],
+  },
+  {
+    id: "quant",
+    name: "Quant / Finance",
+    icon: "📊",
+    desc: "Goldman/McKinsey/hedge fund style — Times New Roman, dense, conservative. Traditional and formal.",
+    good: ["Goldman Sachs", "McKinsey", "Hedge funds", "Banking", "Consulting"],
+  },
+];
+
+function ResumeBuilder({ jobs, api }) {
+  const [selectedJob,  setSelectedJob]  = useState("");
+  const [template,     setTemplate]     = useState("classic");
+  const [building,     setBuilding]     = useState(false);
+  const [status,       setStatus]       = useState("");
+
+  const job = jobs.find(j => j.id === selectedJob || j.id === Number(selectedJob));
+
+  const build = async () => {
+    if (!selectedJob) { setStatus("Select a job first"); return; }
+    if (!job?.tailored_resume) { setStatus("No tailored resume for this job — run Resume Studio first"); return; }
+    setBuilding(true); setStatus("Building…");
+
+    try {
+      const prof = await api.get("/profile");
+
+      // Call Worker to build DOCX
+      const res = await api.post("/resume/build", {
+        jobId: selectedJob,
+        template,
+      });
+
+      if (res.docx) {
+        // Decode base64 DOCX and trigger download
+        const binary = atob(res.docx);
+        const bytes  = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${(job.title || "Resume").replace(/\s+/g,"-")}-${job.company?.replace(/\s+/g,"-") || ""}-${template}.docx`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        setStatus("✓ Downloaded!");
+      } else {
+        setStatus("Error: " + (res.error || "Build failed"));
+      }
+    } catch(e) { setStatus("Error: " + e.message); }
+    setBuilding(false);
+    setTimeout(() => setStatus(""), 4000);
+  };
+
+  return (
+    <Stack>
+      <Alert color="blue" icon="📄">
+        Formats your tailored resume into a professionally designed DOCX you can upload directly to Workday, Greenhouse, or anywhere else. Choose the template that fits the company's culture.
+      </Alert>
+
+      <Card>
+        <CardTitle>Select Job</CardTitle>
+        <select style={s.select} value={selectedJob} onChange={e => setSelectedJob(e.target.value)}>
+          <option value="">— choose a job —</option>
+          {jobs.filter(j => j.tailored_resume).map(j => (
+            <option key={j.id} value={j.id}>{j.title} @ {j.company}</option>
+          ))}
+        </select>
+        {selectedJob && !job?.tailored_resume && (
+          <Alert color="amber" icon="⚑" style={{marginTop:10}}>This job has no tailored resume yet — go to Resume Studio first.</Alert>
+        )}
+        {!jobs.filter(j => j.tailored_resume).length && (
+          <Alert color="amber" icon="⚑" style={{marginTop:10}}>No tailored resumes yet — go to Resume Studio and tailor a resume for a job first.</Alert>
+        )}
+      </Card>
+
+      <Card>
+        <CardTitle>Choose Template</CardTitle>
+        <Stack gap={10}>
+          {TEMPLATES.map(t => (
+            <div key={t.id} onClick={() => setTemplate(t.id)}
+              style={{padding:"14px 16px",borderRadius:8,cursor:"pointer",border:`2px solid ${template===t.id?"var(--a)":"var(--b)"}`,background:template===t.id?"var(--ad)":"var(--surf2)",transition:"all .15s"}}>
+              <Row style={{marginBottom:6}}>
+                <span style={{fontSize:20}}>{t.icon}</span>
+                <span style={{fontWeight:700,fontSize:14,color:template===t.id?"var(--a2)":"var(--t)"}}>{t.name}</span>
+                {template===t.id && <Tag color="blue" style={{marginLeft:"auto"}}>Selected</Tag>}
+              </Row>
+              <div style={{fontSize:12,color:"var(--t2)",lineHeight:1.6,marginBottom:8}}>{t.desc}</div>
+              <Row gap={4} style={{flexWrap:"wrap"}}>
+                <span style={{fontSize:11,color:"var(--t3)",fontFamily:"var(--mono)"}}>Best for:</span>
+                {t.good.map(g => <Tag key={g} color="gray">{g}</Tag>)}
+              </Row>
+            </div>
+          ))}
+        </Stack>
+      </Card>
+
+      <Row>
+        <Btn variant="primary" onClick={build} disabled={building || !selectedJob || !job?.tailored_resume}>
+          {building ? <><Dots/> Building…</> : `⬇ Download ${TEMPLATES.find(t=>t.id===template)?.name} DOCX`}
+        </Btn>
+        {status && <span style={{fontSize:12,fontFamily:"var(--mono)",color:status.startsWith("✓")?"var(--g)":status.startsWith("Error")?"var(--r)":"var(--am)"}}>{status}</span>}
+      </Row>
+
+      <Card>
+        <CardTitle>How to use</CardTitle>
+        <Stack gap={8}>
+          {[
+            ["1","Tailor your resume","Go to Resume Studio, select a job, click Tailor Resume"],
+            ["2","Pick a template","Classic for most jobs, FAANG for big tech, Quant for finance/consulting"],
+            ["3","Download DOCX","Opens in Word or Google Docs — review before uploading"],
+            ["4","Upload to Workday","Use the file upload on the Autofill with Resume step — Workday parses it automatically"],
+          ].map(([n,title,desc]) => (
+            <Row key={n} style={{alignItems:"flex-start",gap:14}}>
+              <div style={{width:24,height:24,borderRadius:"50%",background:"var(--ad)",color:"var(--a2)",fontFamily:"var(--mono)",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{n}</div>
+              <div><div style={{fontWeight:600,fontSize:13}}>{title}</div><div style={{fontSize:12,color:"var(--t3)",marginTop:2}}>{desc}</div></div>
+            </Row>
+          ))}
+        </Stack>
+      </Card>
+    </Stack>
+  );
+}
+
 // ─── App Shell ────────────────────────────────────────────────────────────────
 const PAGES = [
-  { id:"dashboard", icon:"⬡", label:"Dashboard"     },
-  { id:"search",    icon:"🔍", label:"Search Jobs"   },
-  { id:"alerts",    icon:"🔔", label:"Job Alerts"    },
-  { id:"queue",     icon:"≡",  label:"My Queue"      },
-  { id:"studio",    icon:"✦",  label:"Resume Studio" },
-  { id:"ats",       icon:"⚡",  label:"ATS Scorer"    },
-  { id:"apply",     icon:"▶",  label:"Apply"         },
-  { id:"prep",      icon:"🧠", label:"Interview Prep"},
-  { id:"profile",   icon:"◎",  label:"Profile"       },
+  { id:"dashboard", icon:"⬡", label:"Dashboard"      },
+  { id:"search",    icon:"🔍", label:"Search Jobs"    },
+  { id:"alerts",    icon:"🔔", label:"Job Alerts"     },
+  { id:"queue",     icon:"≡",  label:"My Queue"       },
+  { id:"studio",    icon:"✦",  label:"Resume Studio"  },
+  { id:"builder",   icon:"📄", label:"Resume Builder" },
+  { id:"ats",       icon:"⚡",  label:"ATS Scorer"     },
+  { id:"apply",     icon:"▶",  label:"Apply"          },
+  { id:"prep",      icon:"🧠", label:"Interview Prep" },
+  { id:"profile",   icon:"◎",  label:"Profile"        },
 ];
 const TITLES = {
   dashboard:"Command Center", search:"Live Job Search", alerts:"Job Alerts",
-  queue:"My Queue", studio:"Resume Studio", ats:"ATS Scorer",
-  apply:"Apply", prep:"Interview Prep", profile:"Profile", analytics:"Analytics"
+  queue:"My Queue", studio:"Resume Studio", builder:"Resume Builder",
+  ats:"ATS Scorer", apply:"Apply", prep:"Interview Prep", profile:"Profile", analytics:"Analytics"
 };
 const SUBS = {
   dashboard:"wrendi // job-search-ops",
@@ -1691,6 +1948,7 @@ const SUBS = {
   alerts:"saved searches — daily email digest of new matches",
   queue:"manage + track applications",
   studio:"ai tailoring + tone matching — saved to cloud automatically",
+  builder:"format your tailored resume — classic, faang, or quant template",
   ats:"keyword analysis + gap detection",
   apply:"checklist + custom question drafter + stage tracking",
   prep:"tailored questions + talking points from your actual background",
@@ -1805,6 +2063,7 @@ export default function App() {
           {page==="alerts"    && <Alerts api={api}/>}
           {page==="queue"     && <Queue jobs={jobs} api={api} onRefresh={loadJobs} onSelect={onSelect}/>}
           {page==="studio"    && <Studio jobs={jobs} api={api} onRefresh={loadJobs}/>}
+          {page==="builder"   && <ResumeBuilder jobs={jobs} api={api}/>}
           {page==="ats"       && <ATS jobs={jobs} api={api} onRefresh={loadJobs}/>}
           {page==="apply"     && <Apply job={selJob} jobs={jobs} api={api} onRefresh={loadJobs} onSelect={onSelect}/>}
           {page==="prep"      && <InterviewPrep jobs={jobs} api={api}/>}

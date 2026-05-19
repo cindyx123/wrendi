@@ -120,12 +120,21 @@ async function callClaude(apiKey, { prompt, system="", maxTokens=1500 }) {
 }
 
 // ── Live job search via JSearch (RapidAPI) ────────────────────────────────────
-async function searchJobs(query, location, page=1, rapidApiKey) {
+async function searchJobs(query, location, page=1, rapidApiKey, datePosted="all", empType="") {
   if (!rapidApiKey) return { results: [], error: "Search API not configured" };
   const q = location ? `${query} in ${location}` : query;
   try {
+    const params = new URLSearchParams({
+      query: q,
+      num_pages: "1",
+      page: String(page),
+      date_posted: datePosted || "all",
+      country: "us",
+    });
+    if (empType) params.set("employment_types", empType);
+
     const res = await fetch(
-      `https://jsearch.p.rapidapi.com/search-v2?query=${encodeURIComponent(q)}&num_pages=1&page=${page}&date_posted=all&country=us`,
+      `https://jsearch.p.rapidapi.com/search-v2?${params.toString()}`,
       { headers: { "X-RapidAPI-Key": rapidApiKey, "X-RapidAPI-Host": "jsearch.p.rapidapi.com" } }
     );
     const data = await res.json();
@@ -392,12 +401,14 @@ Return ONLY this JSON object with no other text:
     // ── GET /search ─────────────────────────────────────────────────────────
     if (path === "/search" && method === "GET") {
       if (!userId) return err("Unauthorized", 401, origin);
-      const q        = url.searchParams.get("q") || "";
-      const location = url.searchParams.get("location") || "";
-      const page     = parseInt(url.searchParams.get("page")||"1");
+      const q            = url.searchParams.get("q") || "";
+      const location     = url.searchParams.get("location") || "";
+      const page         = parseInt(url.searchParams.get("page")||"1");
+      const datePosted   = url.searchParams.get("date_posted") || "all";
+      const empType      = url.searchParams.get("employment_type") || "";
       if (!q.trim()) return json({ results:[] }, 200, origin);
-      const data = await searchJobs(q, location, page, env.RAPIDAPI_KEY);
-      await track(env, userId, "search", { query: q, location, results: data.results?.length || 0 });
+      const data = await searchJobs(q, location, page, env.RAPIDAPI_KEY, datePosted, empType);
+      await track(env, userId, "search", { query:q, location, results:data.results?.length||0 });
       return json(data, 200, origin);
     }
 
@@ -626,6 +637,60 @@ Include 10-12 questions. Make every question and every talking point specific to
       return ok({}, origin);
     }
 
+    // ── POST /resume/build ─────────────────────────────────────────────────
+    if (path === "/resume/build" && method === "POST") {
+      if (!userId) return err("Unauthorized", 401, origin);
+      const { jobId, template = "classic" } = await request.json().catch(()=>({}));
+      const [job, prof] = await Promise.all([
+        env.DB.prepare("SELECT * FROM jobs WHERE id=? AND user_id=?").bind(jobId, userId).first(),
+        env.DB.prepare("SELECT * FROM profiles WHERE user_id=?").bind(userId).first(),
+      ]);
+      if (!job)                  return err("Job not found", 404, origin);
+      if (!job.tailored_resume)  return err("No tailored resume for this job", 400, origin);
+
+      // Build DOCX using AI — ask Claude to format as structured JSON, then build
+      const res = await callClaude(env.ANTHROPIC_API_KEY, {
+        system: "You are a resume formatter. Parse the resume text and return ONLY valid JSON with this structure. No markdown, no explanation.",
+        prompt: `Parse this resume into structured JSON.
+
+RESUME:
+${job.tailored_resume}
+
+Return ONLY this JSON (no markdown):
+{
+  "name": "Full Name",
+  "contact": "location | phone | email | linkedin",
+  "summary": "summary paragraph if present",
+  "sections": [
+    {
+      "title": "SECTION NAME",
+      "entries": [
+        {
+          "company": "Company Name | Location",
+          "role": "Job Title",
+          "dates": "MM/YYYY – MM/YYYY",
+          "bullets": ["bullet 1", "bullet 2"]
+        }
+      ],
+      "freeText": ["line 1", "line 2"]
+    }
+  ]
+}`,
+        maxTokens: 2000,
+      });
+
+      if (res.error) return err(res.error, 502, origin);
+
+      try {
+        const parsed = JSON.parse(res.text.replace(/```json|```/g,"").trim());
+        const docxB64 = await buildDocx(parsed, prof || {}, template);
+        await track(env, userId, "resume_built", { job_id: jobId, template });
+        return ok({ docx: docxB64 }, origin);
+      } catch(e) {
+        return err("Build failed: " + e.message, 502, origin);
+      }
+    }
+
     return err("Not found", 404, origin);
   }
 };
@@ -732,4 +797,229 @@ async function sendAlertDigestEmail(env, user, sections) {
       html,
     }),
   });
+}
+
+// ─── DOCX Builder (runs in Cloudflare Worker — no npm) ───────────────────────
+// Generates a DOCX file as base64 using raw Office Open XML
+async function buildDocx(resume, profile, template="classic") {
+  const name    = resume.name    || profile.name    || "";
+  const contact = [profile.location, profile.phone, profile.email, profile.linkedin, profile.portfolio].filter(Boolean).join(" | ");
+  const summary = resume.summary || "";
+
+  const T = {
+    classic: { font:"Calibri",    size:"20", titleSize:"36", headColor:"1B4F8A", textColor:"1A1A1A", grayColor:"555555" },
+    faang:   { font:"Arial",      size:"20", titleSize:"44", headColor:"000000", textColor:"000000", grayColor:"444444" },
+    quant:   { font:"Times New Roman", size:"19", titleSize:"34", headColor:"000000", textColor:"000000", grayColor:"333333" },
+  }[template] || T.classic;
+
+  const xml = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+
+  const run = (text, opts={}) => `<w:r><w:rPr>
+    <w:rFonts w:ascii="${T.font}" w:hAnsi="${T.font}"/>
+    <w:sz w:val="${opts.size||T.size}"/><w:szCs w:val="${opts.size||T.size}"/>
+    ${opts.bold?"<w:b/>":""}${opts.italic?"<w:i/>":""}
+    <w:color w:val="${opts.color||T.textColor}"/>
+    ${opts.allCaps?"<w:caps/>":""}
+  </w:rPr><w:t xml:space="preserve">${xml(text)}</w:t></w:r>`;
+
+  const para = (children, opts={}) => `<w:p>
+    <w:pPr>
+      ${opts.center?`<w:jc w:val="center"/>`:""}
+      ${opts.before||opts.after?`<w:spacing w:before="${opts.before||0}" w:after="${opts.after||80}"/>`:""}
+      ${opts.borderBottom?`<w:pBdr><w:bottom w:val="single" w:sz="${opts.borderSz||6}" w:color="${opts.borderColor||T.headColor}" w:space="1"/></w:pBdr>`:""}
+      ${opts.bullet?`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>`:""}
+      <w:rPr><w:rFonts w:ascii="${T.font}" w:hAnsi="${T.font}"/><w:sz w:val="${T.size}"/></w:rPr>
+    </w:pPr>
+    ${children}
+  </w:p>`;
+
+  const sectionHead = (title) => para(
+    run(title.toUpperCase(), { bold:true, size:"22", color:T.headColor, allCaps:true }),
+    { before:"200", after:"60", borderBottom:true, borderSz:"6", borderColor:T.headColor }
+  );
+
+  let body = "";
+
+  // Name
+  body += para(run(name, { bold:true, size:T.titleSize, color:T.textColor }), { center:true, after:"60" });
+  // Contact
+  if (contact) body += para(run(contact, { size:"18", color:T.grayColor }), { center:true, after:"160" });
+  // Summary
+  if (summary) {
+    body += sectionHead("Summary");
+    body += para(run(summary, { size:T.size }), { after:"80" });
+  }
+
+  // Sections
+  for (const sec of (resume.sections||[])) {
+    body += sectionHead(sec.title);
+    for (const entry of (sec.entries||[])) {
+      if (entry.company) {
+        body += para(
+          run(entry.company, { bold:true, size:"21" }) +
+          (entry.dates ? `<w:r><w:rPr><w:rFonts w:ascii="${T.font}" w:hAnsi="${T.font}"/><w:sz w:val="${T.size}"/><w:color w:val="${T.grayColor}"/></w:rPr><w:tab/></w:r>` + run(entry.dates, { size:T.size, color:T.grayColor }) : ""),
+          { before:"80", after:"20" }
+        );
+      }
+      if (entry.role) body += para(run(entry.role, { italic:true, size:T.size, color:T.grayColor }), { after:"40" });
+      for (const b of (entry.bullets||[])) body += para(run(b, { size:T.size }), { bullet:true, after:"40" });
+    }
+    for (const line of (sec.freeText||[])) body += para(run(line, { size:T.size }), { bullet:true, after:"40" });
+  }
+
+  // Assemble DOCX XML
+  const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:body>
+${body}
+<w:sectPr>
+  <w:pgSz w:w="12240" w:h="15840"/>
+  <w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080"/>
+</w:sectPr>
+</w:body></w:document>`;
+
+  const numbering = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/>
+    <w:lvlText w:val="•"/><w:lvlJc w:val="left"/>
+    <w:pPr><w:ind w:left="360" w:hanging="240"/></w:pPr>
+    <w:rPr><w:rFonts w:ascii="${T.font}" w:hAnsi="${T.font}"/></w:rPr></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+</w:numbering>`;
+
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>`;
+
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="${T.font}" w:hAnsi="${T.font}"/>
+    <w:sz w:val="${T.size}"/><w:color w:val="${T.textColor}"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+</w:styles>`;
+
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+</Types>`;
+
+  const pkgRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  // Build ZIP (DOCX is a ZIP)
+  const files = {
+    "[Content_Types].xml": contentTypes,
+    "_rels/.rels": pkgRels,
+    "word/document.xml": docXml,
+    "word/styles.xml": styles,
+    "word/numbering.xml": numbering,
+    "word/_rels/document.xml.rels": rels,
+  };
+
+  const zipData = await buildZip(files);
+  return btoa(String.fromCharCode(...zipData));
+}
+
+// Minimal ZIP builder (no dependencies)
+async function buildZip(files) {
+  const encoder = new TextEncoder();
+  const entries = [];
+  let offset = 0;
+
+  const crc32 = (data) => {
+    let crc = 0xFFFFFFFF;
+    const table = new Uint32Array(256).map((_,i) => {
+      let c = i;
+      for (let j = 0; j < 8; j++) c = (c&1) ? (0xEDB88320 ^ (c>>>1)) : (c>>>1);
+      return c;
+    });
+    for (const byte of data) crc = table[(crc^byte)&0xFF] ^ (crc>>>8);
+    return (crc^0xFFFFFFFF) >>> 0;
+  };
+
+  const u16 = (n) => [n&0xFF, (n>>8)&0xFF];
+  const u32 = (n) => [n&0xFF, (n>>8)&0xFF, (n>>16)&0xFF, (n>>24)&0xFF];
+
+  const parts = [];
+
+  for (const [name, content] of Object.entries(files)) {
+    const nameBytes = encoder.encode(name);
+    const dataBytes = encoder.encode(content);
+    const crc       = crc32(dataBytes);
+    const now       = new Date();
+    const dosDate   = ((now.getFullYear()-1980)<<9)|((now.getMonth()+1)<<5)|now.getDate();
+    const dosTime   = (now.getHours()<<11)|(now.getMinutes()<<5)|(now.getSeconds()>>1);
+
+    const localHeader = new Uint8Array([
+      0x50,0x4B,0x03,0x04, // sig
+      0x14,0x00,           // version
+      0x00,0x00,           // flags
+      0x00,0x00,           // compression (stored)
+      ...u16(dosTime), ...u16(dosDate),
+      ...u32(crc),
+      ...u32(dataBytes.length),
+      ...u32(dataBytes.length),
+      ...u16(nameBytes.length),
+      0x00,0x00,           // extra len
+    ]);
+
+    entries.push({ name, nameBytes, crc, size: dataBytes.length, offset });
+    parts.push(localHeader, nameBytes, dataBytes);
+    offset += localHeader.length + nameBytes.length + dataBytes.length;
+  }
+
+  // Central directory
+  const cdParts = [];
+  let cdSize = 0;
+  const cdOffset = offset;
+
+  for (const e of entries) {
+    const now = new Date();
+    const dosDate = ((now.getFullYear()-1980)<<9)|((now.getMonth()+1)<<5)|now.getDate();
+    const dosTime = (now.getHours()<<11)|(now.getMinutes()<<5)|(now.getSeconds()>>1);
+    const cd = new Uint8Array([
+      0x50,0x4B,0x01,0x02,
+      0x14,0x00,0x14,0x00,
+      0x00,0x00,0x00,0x00,
+      ...u16(dosTime), ...u16(dosDate),
+      ...u32(e.crc),
+      ...u32(e.size), ...u32(e.size),
+      ...u16(e.nameBytes.length),
+      0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,
+      ...u32(e.offset),
+    ]);
+    cdParts.push(cd, e.nameBytes);
+    cdSize += cd.length + e.nameBytes.length;
+  }
+
+  const eocd = new Uint8Array([
+    0x50,0x4B,0x05,0x06,
+    0x00,0x00,0x00,0x00,
+    ...u16(entries.length), ...u16(entries.length),
+    ...u32(cdSize),
+    ...u32(cdOffset),
+    0x00,0x00,
+  ]);
+
+  // Combine all parts
+  const allParts = [...parts, ...cdParts, eocd];
+  const totalSize = allParts.reduce((s,p) => s + p.length, 0);
+  const result = new Uint8Array(totalSize);
+  let pos = 0;
+  for (const p of allParts) { result.set(p, pos); pos += p.length; }
+  return result;
 }
